@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+venv/
+.venv/
+.env
+
+# Logs & data runtime
+logs/
+data/*.db
+data/*.db-journal
+
+# Environment / secrets
+*.key
+*.pem
+.env.*
+!.env.example
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.log
