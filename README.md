@@ -21,7 +21,8 @@ Bot trading otomatis multi-strategi untuk Binance / Bybit / OKX futures. Satu ko
 - **Persistensi & metrik** — `TradeStore` SQLite: riwayat trade, win rate, profit factor, state trailing (survive restart).
 - **Backtest modul** (`backtest.py`) — replay strategi momentum, hitung win rate/PF/drawdown.
 - **Hemat API call** — 1 `fetch_balance`/tick, batch tickers, OHLCV paralel (ThreadPool).
-- **Notifikasi** via Telegram (opsional).
+- **Notifikasi** via Telegram (opsional): perintah `/status`, `/positions`, `/balance`, `/metrics`, `/trend`, `/screen` (screening koin), `/instruksi` (panduan), + **laporan harian otomatis** (bisa diatur jannya via `reporting.daily_hour`).
+- **Screening koin** — scan semua market USDT-M, sortir berdasarkan volume, tampilkan tren (EMA9/21/50) + RSI + rasio volume (konfigurasi di `screener`).
 
 ## Setup
 
@@ -55,11 +56,16 @@ Buat API key futures di exchange masing-masing (untuk Binance/Bybit beri akses *
     "momentum":  { "enabled": true },
     "ai_signal": { "enabled": false },
     "grid":      { "enabled": false }
-  }
+  },
+  "telegram": { "enabled": false, "bot_token": "", "chat_id": "" },
+  "screener": { "timeframe": "1h", "max_coins": 10, "min_volume_usdt": 0 },
+  "reporting": { "daily_hour": 8 }
 }
 ```
 
 Aktifkan strategi dengan set `enabled: true`. Isi `.env` sesuai API key exchange & AI yang dipakai.
+
+Untuk notifikasi Telegram: set `telegram.enabled: true`, isi `bot_token` & `chat_id` di `config.json` atau `.env`. Laporan harian dikirim tiap jam `reporting.daily_hour` (default 08:00).
 
 ## Menjalankan
 

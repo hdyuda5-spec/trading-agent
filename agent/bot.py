@@ -32,6 +32,7 @@ class TradingBot:
         self.telegram = TelegramController(self)
         self.interval = config["execution"]["poll_interval_seconds"]
         self.one_per_symbol = config["execution"].get("one_position_per_symbol", True)
+        self.report_hour = config.get("reporting", {}).get("daily_hour", 8)
         self.initial_equity = None
         self.halted = False
         self.trailing = self.store.load_state("trailing", {}) or {}
@@ -71,20 +72,15 @@ class TradingBot:
             self._run_momentum_and_ai(symbol, df, positions, equity, atr)
             self._run_grid(symbol, positions, equity, atr)
         self.store.save_state("trailing", self.trailing)
-        self._maybe_report_metrics()
+        self._maybe_daily_report()
 
-    def _maybe_report_metrics(self):
-        day = time.strftime("%Y-%m-%d")
-        if day == self._last_metrics_day:
+    def _maybe_daily_report(self):
+        today = time.strftime("%Y-%m-%d")
+        if time.localtime().tm_hour != self.report_hour or today == self._last_metrics_day:
             return
-        self._last_metrics_day = day
-        metrics = self.store.metrics()
-        if not metrics:
-            return
-        self.notifier.info(
-            f"[METRICS] trades={metrics['trades']} win_rate={metrics['win_rate']}% "
-            f"profit_factor={metrics['profit_factor']} net_pnl={metrics['net_pnl']}"
-        )
+        self._last_metrics_day = today
+        self.notifier.info(f"[REPORT] daily report {today}")
+        self.telegram.send_daily_report()
 
     def _fetch_ohlcv_parallel(self):
         symbols = self.config["symbols"]

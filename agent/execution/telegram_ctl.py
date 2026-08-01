@@ -3,6 +3,8 @@ import time
 
 import requests
 
+from agent.core.screener import Screener
+
 
 class TelegramController:
     def __init__(self, bot):
@@ -56,16 +58,26 @@ class TelegramController:
         except Exception:
             pass
 
+    def _reply_async(self, fn):
+        def run():
+            try:
+                self._send(fn())
+            except Exception:
+                pass
+        threading.Thread(target=run, daemon=True).start()
+
     def _handle(self, text):
         cmd = text.split()[0].split("@")[0].lower()
         handlers = {
-            "/start": self._help,
+            "/start": self._instruksi,
             "/help": self._help,
+            "/instruksi": self._instruksi,
             "/status": self._status,
             "/positions": self._positions,
             "/balance": self._balance,
             "/metrics": self._metrics,
             "/trend": self._trend,
+            "/screen": self._screen_cmd,
         }
         handler = handlers.get(cmd)
         return handler() if handler else self._help()
@@ -77,7 +89,32 @@ class TelegramController:
             "/positions - posisi terbuka\n"
             "/balance - saldo USDT\n"
             "/metrics - win rate & PnL\n"
-            "/trend - arah tren tiap simbol"
+            "/trend - arah tren tiap simbol\n"
+            "/screen - screening koin (trend/volume)\n"
+            "/instruksi - panduan lengkap\n"
+            "/help - bantuan ini"
+        )
+
+    def _instruksi(self):
+        return (
+            "🤖 Trading Agent — Panduan\n\n"
+            "1) Setup\n"
+            "- git clone https://github.com/hdyuda5-spec/trading-agent\n"
+            "- pip install -r requirements.txt\n"
+            "- cp .env.example .env lalu isi API key\n\n"
+            "2) Config (config.json)\n"
+            "- pastikan \"testnet\": true\n"
+            "- aktifkan strategi: momentum / ai_signal / grid\n"
+            "- atur risiko: leverage, max_position_pct, dll.\n\n"
+            "3) Jalankan\n"
+            "- python main.py\n\n"
+            "4) Perintah bot\n"
+            "- /status /positions /balance /metrics /trend /screen\n\n"
+            "5) Otomatis\n"
+            "- notifikasi order & error\n"
+            "- laporan harian jam 08:00\n"
+            "- screening koin di laporan harian\n\n"
+            "⚠️ Selalu mulai dengan testnet. Bot ini bukan saran keuangan."
         )
 
     def _status(self):
@@ -95,13 +132,17 @@ class TelegramController:
         return "\n".join(lines)
 
     def _positions(self):
+        text = self._positions_text()
+        return text or "Tidak ada posisi terbuka."
+
+    def _positions_text(self):
         try:
             positions = self.bot.exchange.fetch_positions()
         except Exception as e:
             return f"Gagal ambil posisi: {e}"
         open_positions = [p for p in positions if abs(float(p.get("contracts") or 0)) > 0]
         if not open_positions:
-            return "Tidak ada posisi terbuka."
+            return None
         lines = []
         for p in open_positions:
             side = "LONG" if float(p.get("contracts") or 0) > 0 else "SHORT"
@@ -137,3 +178,41 @@ class TelegramController:
             direction = self.bot.trend.direction(symbol)
             lines.append(f"{symbol}: {direction or 'n/a'}")
         return "\n".join(lines)
+
+    def _screen_cmd(self):
+        self._reply_async(self._screen)
+        return "Menyaring pasar... hasil dikirim sebentar."
+
+    def _screen(self):
+        try:
+            screener = Screener(self.bot.exchange, self.bot.config)
+            results = screener.candidates()
+            return screener.format(results, title=f"Screening {screener.timeframe}")
+        except Exception as e:
+            return f"Screening gagal: {e}"
+
+    def send_daily_report(self):
+        if not self.enabled:
+            return
+        b = self.bot
+        day = time.strftime("%Y-%m-%d")
+        lines = [f"📊 Laporan Harian {day}"]
+        equity = b.initial_equity
+        now_eq = None
+        try:
+            now_eq = b._equity()
+        except Exception:
+            pass
+        if now_eq is not None and equity:
+            chg = (now_eq / equity - 1) * 100
+            lines.append(f"Equity: {now_eq:.2f} USDT (start {equity:.2f}, {chg:+.2f}%)")
+        positions = self._positions_text()
+        lines.append("Posisi:\n" + (positions or "tidak ada"))
+        metrics = b.store.metrics()
+        if metrics:
+            lines.append(
+                f"Metrik: trades={metrics['trades']} win={metrics['win_rate']}% "
+                f"pf={metrics['profit_factor']} net={metrics['net_pnl']}"
+            )
+        self._send("\n".join(lines))
+        self._reply_async(self._screen)
