@@ -29,11 +29,13 @@ class TradingBot:
         self.trend = TrendFilter(self.exchange, config)
         self.store = TradeStore()
         self.interval = config["execution"]["poll_interval_seconds"]
+        self.one_per_symbol = config["execution"].get("one_position_per_symbol", True)
         self.initial_equity = None
         self.halted = False
         self.trailing = self.store.load_state("trailing", {}) or {}
         self._positions = {}
         self._dfs = {}
+        self._last_metrics_day = ""
 
     def run(self):
         if not self.exchange.check_health():
@@ -66,6 +68,20 @@ class TradingBot:
             self._run_momentum_and_ai(symbol, df, positions, equity, atr)
             self._run_grid(symbol, positions, equity, atr)
         self.store.save_state("trailing", self.trailing)
+        self._maybe_report_metrics()
+
+    def _maybe_report_metrics(self):
+        day = time.strftime("%Y-%m-%d")
+        if day == self._last_metrics_day:
+            return
+        self._last_metrics_day = day
+        metrics = self.store.metrics()
+        if not metrics:
+            return
+        self.notifier.info(
+            f"[METRICS] trades={metrics['trades']} win_rate={metrics['win_rate']}% "
+            f"profit_factor={metrics['profit_factor']} net_pnl={metrics['net_pnl']}"
+        )
 
     def _fetch_ohlcv_parallel(self):
         symbols = self.config["symbols"]
@@ -165,6 +181,10 @@ class TradingBot:
                 self.notifier.info(f"[REVERSE] {symbol}: close {open_pos['side']} before {signal['side']}")
                 self._close_position(open_pos["pos"], "reversal")
                 positions = self.exchange.fetch_positions()
+                open_pos = None
+            if self.one_per_symbol and open_pos:
+                logger.info("%s skipped for %s: %s position already open", strategy.name, symbol, open_pos["side"])
+                continue
             fee_pct = 0.02 if self.config["execution"]["order_type"] == "limit" else 0.05
             cost_ok, spread = self.risk.check_fee_tolerance(symbol, fee_pct)
             if not cost_ok:

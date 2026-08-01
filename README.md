@@ -17,6 +17,7 @@ Bot trading otomatis multi-strategi untuk Binance / Bybit / OKX futures. Satu ko
   - **Trailing stop** + **daily loss limit** (halt otomatis + close semua).
   - **Filter biaya/spread** (`min_fee_tolerance_pct`) — skip bila spread+fee melebihi toleransi.
 - **Penutupan posisi otomatis**: trailing, sinyal reversal, SL/TP, daily loss.
+- **Koordinasi 1 posisi per simbol** — momentum & AI tidak buka posisi dobel di simbol yang sama (opsi `one_position_per_symbol`).
 - **Persistensi & metrik** — `TradeStore` SQLite: riwayat trade, win rate, profit factor, state trailing (survive restart).
 - **Backtest modul** (`backtest.py`) — replay strategi momentum, hitung win rate/PF/drawdown.
 - **Hemat API call** — 1 `fetch_balance`/tick, batch tickers, OHLCV paralel (ThreadPool).

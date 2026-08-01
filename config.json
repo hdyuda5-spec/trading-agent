@@ -74,7 +74,8 @@
     "order_type": "limit",
     "reduce_only_on_close": true,
     "retry_attempts": 3,
-    "poll_interval_seconds": 60
+    "poll_interval_seconds": 60,
+    "one_position_per_symbol": true
   },
 
   "telegram": {
