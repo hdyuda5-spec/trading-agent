@@ -9,6 +9,7 @@ from agent.core.utils import compute_atr, ohlcv_to_dataframe
 from agent.data.trades import TradeStore
 from agent.execution.notifier import Notifier
 from agent.execution.order import OrderManager
+from agent.execution.telegram_ctl import TelegramController
 from agent.strategies import build_strategies
 
 logger = logging.getLogger("trading-agent")
@@ -28,6 +29,7 @@ class TradingBot:
         self.strategies = build_strategies(config, self.exchange, self.notifier)
         self.trend = TrendFilter(self.exchange, config)
         self.store = TradeStore()
+        self.telegram = TelegramController(self)
         self.interval = config["execution"]["poll_interval_seconds"]
         self.one_per_symbol = config["execution"].get("one_position_per_symbol", True)
         self.initial_equity = None
@@ -44,6 +46,7 @@ class TradingBot:
         self.notifier.info(f"Agent started on {self.config['exchange']['name']} (testnet={self.exchange.testnet})")
         self.initial_equity = self._equity()
         self.risk.set_initial_equity(self.initial_equity)
+        self.telegram.start()
         while True:
             try:
                 self.tick()
