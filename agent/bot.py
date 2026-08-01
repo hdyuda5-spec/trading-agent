@@ -35,6 +35,8 @@ class TradingBot:
         self.report_hour = config.get("reporting", {}).get("daily_hour", 8)
         self.initial_equity = None
         self.halted = False
+        self._min_equity = float(config["risk"].get("min_equity_usdt", 20))
+        self._low_balance_halted = False
         self.trailing = self.store.load_state("trailing", {}) or {}
         self._positions = {}
         self._dfs = {}
@@ -45,7 +47,14 @@ class TradingBot:
             self.notifier.alert("Exchange unreachable, aborting", "")
             return
         self.notifier.info(f"Agent started on {self.config['exchange']['name']} (testnet={self.exchange.testnet})")
-        self.initial_equity = self._equity()
+        equity = self._equity()
+        baseline = self.store.load_state("equity_baseline", None)
+        today = time.strftime("%Y-%m-%d")
+        if baseline and baseline.get("date") == today and baseline.get("equity", 0) > 0:
+            self.initial_equity = baseline["equity"]
+        else:
+            self.initial_equity = equity
+            self.store.save_state("equity_baseline", {"date": today, "equity": equity})
         self.risk.set_initial_equity(self.initial_equity)
         self.telegram.start()
         while True:
@@ -57,6 +66,24 @@ class TradingBot:
 
     def tick(self):
         equity = self._equity()
+        if self.risk.below_min_equity(equity):
+            if not self._low_balance_halted:
+                self._low_balance_halted = True
+                self.notifier.alert(
+                    f"Equity {equity:.2f} USDT below minimum {self._min_equity} USDT. "
+                    f"Trading paused until balance is topped up.",
+                    "",
+                )
+            return
+        if self._low_balance_halted and equity >= self._min_equity:
+            self._low_balance_halted = False
+            self.notifier.info(f"Equity recovered to {equity:.2f} USDT, resuming trading")
+        baseline = self.store.load_state("equity_baseline", None)
+        today = time.strftime("%Y-%m-%d")
+        if not baseline or baseline.get("date") != today:
+            self.store.save_state("equity_baseline", {"date": today, "equity": equity})
+            self.initial_equity = equity
+            self.risk.set_initial_equity(equity)
         self.risk.update_equity(equity)
         positions = self.exchange.fetch_positions()
         self._manage_positions(equity, positions)

@@ -78,8 +78,14 @@ class RiskManager:
     def daily_loss_exceeded(self, equity):
         if self.initial_equity is None or self.initial_equity <= 0:
             return False
+        if equity <= 0:
+            return True
         loss_pct = ((self.initial_equity - equity) / self.initial_equity) * 100.0
         return loss_pct >= abs(self.cfg["daily_loss_limit_pct"])
+
+    def below_min_equity(self, equity):
+        min_eq = float(self.cfg.get("min_equity_usdt", 20))
+        return min_eq > 0 and equity < min_eq
 
     def trailing_stop_hit(self, side, best_price, current):
         pct = self.cfg.get("trailing_stop_pct", 0.0) / 100.0

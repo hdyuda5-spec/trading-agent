@@ -1,0 +1,20 @@
+[Unit]
+Description=AI Trading Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trading
+WorkingDirectory=/opt/trading-agent
+EnvironmentFile=/opt/trading-agent/.env
+ExecStart=/usr/bin/python3 main.py
+Restart=always
+RestartSec=15
+# Stop only after full graceful shutdown
+TimeoutStopSec=30
+# Hard memory cap (optional): 256 MB
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

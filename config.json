@@ -28,6 +28,7 @@
     "stop_loss_pct": 1.0,
     "trailing_stop_pct": 1.5,
     "daily_loss_limit_pct": 5.0,
+    "min_equity_usdt": 20,
     "max_open_positions": 3,
     "min_fee_tolerance_pct": 0.15,
     "use_atr_stops": true,
@@ -71,9 +72,11 @@
   },
 
   "execution": {
-    "order_type": "limit",
+    "order_type": "market",
+    "position_mode": "one-way",
     "reduce_only_on_close": true,
     "retry_attempts": 3,
+    "entry_ttl_seconds": 180,
     "poll_interval_seconds": 60,
     "one_position_per_symbol": true
   },

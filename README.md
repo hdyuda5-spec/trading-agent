@@ -14,8 +14,12 @@ Bot trading otomatis multi-strategi untuk Binance / Bybit / OKX futures. Satu ko
   - Ukuran posisi % + **sizing adaptif volatilitas** (ATR-based, 0.5–2×).
   - **SL/TP berbasis ATR** (fallback ke % tetap).
   - Batas exposure total + pending order dihitung, max open positions.
-  - **Trailing stop** + **daily loss limit** (halt otomatis + close semua).
+  - **Trailing stop** + **daily loss limit** (halt otomatis + close semua, baseline per-hari di-persist supaya tetap aktif walau restart).
   - **Filter biaya/spread** (`min_fee_tolerance_pct`) — skip bila spread+fee melebihi toleransi.
+  - **Minimal balance guard** (`risk.min_equity_usdt`, default 20) — kalau saldo di bawah ambang, trading dipause + alert Telegram, lanjut otomatis saat saldo pulih.
+- **Eksekusi order yang aman**:
+  - Entry default **market** (tidak ada order menggantung). Bila memakai limit: harga live dari ticker (bukan close candle) + verifikasi fill sebelum pasang SL/TP + auto-cancel order yang tak terisi dalam `execution.entry_ttl_seconds` (default 180 s).
+  - Dukungan **hedge mode**: set `execution.position_mode: "hedge"` agar SL/TP/close_all menyertakan `positionSide`.
 - **Penutupan posisi otomatis**: trailing, sinyal reversal, SL/TP, daily loss.
 - **Koordinasi 1 posisi per simbol** — momentum & AI tidak buka posisi dobel di simbol yang sama (opsi `one_position_per_symbol`).
 - **Persistensi & metrik** — `TradeStore` SQLite: riwayat trade, win rate, profit factor, state trailing (survive restart).
@@ -100,6 +104,34 @@ agent/
 backtest.py              # backtest strategi
 main.py                  # entry point (--check, --config)
 config.json              # konfigurasi utama
+deploy/
+  trading-agent.service  # unit systemd (auto-restart)
+  ecosystem.config.js    # pm2 (auto-restart)
+```
+
+## Auto-restart (live server)
+
+Bot ini **tidak** restart sendiri — pakai systemd atau pm2 agar tetap jalan saat crash/putus internet.
+
+### systemd (VPS Linux)
+
+```bash
+sudo cp deploy/trading-agent.service /etc/systemd/system/
+sudo mkdir -p /opt/trading-agent
+# salin kode + .env ke /opt/trading-agent, sesuaikan User/Python path di .service
+sudo systemctl daemon-reload
+sudo systemctl enable --now trading-agent
+sudo systemctl status trading-agent
+```
+
+### pm2
+
+```bash
+npm install -g pm2
+mkdir -p /opt/trading-agent /var/log/trading-agent
+# salin kode + .env ke /opt/trading-agent
+cd /opt/trading-agent && pm2 start deploy/ecosystem.config.js
+pm2 save && pm2 startup
 ```
 
 ## Keamanan
@@ -108,4 +140,5 @@ config.json              # konfigurasi utama
 - Jangan taruh API key langsung di repo — pakai `.env` (sudah di-`gitignore`).
 - Gunakan leverage rendah & limit `max_position_pct` saat uji nyata.
 - Backtest dulu (`backtest.py`) sebelum strategi baru dipakai live.
+- Pastikan akun dalam **one-way mode** (bukan hedge mode) atau set `execution.position_mode: "hedge"` agar SL/TP & close_all jalan.
 - Bot ini bukan saran keuangan; uji di testnet dulu sebelum dana sungguhan.

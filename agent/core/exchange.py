@@ -87,6 +87,9 @@ class ExchangeClient:
     def cancel_order(self, order_id, symbol):
         return self.client.cancel_order(order_id, symbol)
 
+    def fetch_order(self, order_id, symbol):
+        return self.client.fetch_order(order_id, symbol)
+
     def fetch_open_orders(self, symbol=None):
         return self.client.fetch_open_orders(symbol)
 
