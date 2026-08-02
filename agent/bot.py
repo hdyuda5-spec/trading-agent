@@ -8,7 +8,7 @@ from agent.core.risk import RiskManager
 from agent.core.screener import Screener
 from agent.core.trend import TrendFilter
 from agent.core.utils import compute_atr, ohlcv_to_dataframe
-from agent.core.whale import WhaleDetector
+from agent.core.whale import WhaleDetector, should_execute_trade
 from agent.data.trades import TradeStore
 from agent.execution.notifier import Notifier, fmt_wib
 from agent.execution.order import OrderManager
@@ -267,6 +267,10 @@ class TradingBot:
                 if self._losing_streak(symbol, side):
                     self.notifier.info(f"Auto-trade skip {symbol}: pola kalah beruntun")
                     continue
+                wok, wreason = self._whale_filter_ok(symbol, side)
+                if not wok:
+                    self.notifier.info(f"Auto-trade skip {symbol}: {wreason}")
+                    continue
                 ok, equity_eff, reason = self._screen_trade_ok(symbol, side, r["price"], r.get("atr") or 0.0, equity, positions)
                 if not ok:
                     self.notifier.info(f"Auto-trade skip {symbol}: {reason}")
@@ -314,6 +318,21 @@ class TradingBot:
             return False
         recent = self.store.recent_trades(symbol, side, limit)
         return len(recent) >= limit and all(r["pnl"] < 0 for r in recent)
+
+    def _whale_filter_ok(self, symbol, side):
+        wcfg = self.config.get("whale", {})
+        if not wcfg.get("filter_trades", True):
+            return True, ""
+        event = self.whale.data(symbol)
+        if not event:
+            return True, "tidak ada data whale"
+        whale_data = {
+            "net_flow_usdt": event["net_usdt"],
+            "transaction_count": event["n"],
+        }
+        signal = "BUY" if side == "LONG" else "SELL"
+        min_txns = int(wcfg.get("min_whale_txns", 3))
+        return should_execute_trade(signal, whale_data, min_txns)
 
     def _screen_trade_ok(self, symbol, side, price, atr, equity, positions):
         m = self.exchange.client.markets.get(symbol)
@@ -505,6 +524,11 @@ class TradingBot:
                 trend_dir = self.trend.direction(symbol)
                 if trend_dir and trend_dir != signal["side"]:
                     logger.info("%s skipped for %s: trend %s vs %s", strategy.name, symbol, trend_dir, signal["side"])
+                    continue
+            if self.config.get("whale", {}).get("filter_trades", True):
+                wok, wreason = self._whale_filter_ok(symbol, signal["side"])
+                if not wok:
+                    logger.info("%s skipped for %s: %s", strategy.name, symbol, wreason)
                     continue
             with self._trade_lock:
                 try:
