@@ -1,4 +1,4 @@
-from agent.core.utils import compute_ema, compute_rsi, ohlcv_to_dataframe
+from agent.core.utils import compute_atr, compute_ema, compute_rsi, ohlcv_to_dataframe
 
 
 class Screener:
@@ -41,8 +41,8 @@ class Screener:
             ema21 = float(compute_ema(close, 21).iloc[-1])
             ema50 = float(compute_ema(close, 50).iloc[-1])
             rsi = float(compute_rsi(close, 14).iloc[-1])
-            vol_avg = float(df["volume"].iloc[-21:-1].mean()) or 0
-            vol_ratio = float(df["volume"].iloc[-1]) / vol_avg if vol_avg else 0
+            vol_avg = float(df["volume"].iloc[-22:-2].mean()) or 0
+            vol_ratio = float(df["volume"].iloc[-2]) / vol_avg if vol_avg else 0
             if ema9 > ema21 > ema50:
                 trend = "LONG"
             elif ema9 < ema21 < ema50:
@@ -56,6 +56,8 @@ class Screener:
                 "rsi": round(rsi, 1),
                 "vol": round(vol_ratio, 1),
                 "chg": round(chg, 2),
+                "price": float(close.iloc[-1]),
+                "atr": float(compute_atr(df, 14).iloc[-1]) if len(df) > 15 else 0.0,
             }
         except Exception:
             return None

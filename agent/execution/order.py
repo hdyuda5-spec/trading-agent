@@ -154,10 +154,14 @@ class OrderManager:
     def close_all(self, symbol):
         positions = self.exchange.fetch_positions([symbol])
         for pos in positions:
-            contracts = float(pos.get("contracts") or 0)
+            contracts = abs(float(pos.get("contracts") or 0))
             if contracts == 0:
                 continue
-            side = "sell" if contracts > 0 else "buy"
+            pside = str(pos.get("side") or "").lower()
+            if pside not in ("long", "short"):
+                amt = (pos.get("info") or {}).get("positionAmt")
+                pside = "long" if (float(amt or 0) > 0) else "short"
+            side = "sell" if pside == "long" else "buy"
             try:
                 self.exchange.create_order(
                     symbol,
@@ -168,18 +172,18 @@ class OrderManager:
                 )
             except Exception:
                 try:
-                    side_param = "LONG" if contracts > 0 else "SHORT"
+                    side_param = "LONG" if pside == "long" else "SHORT"
                     self.exchange.create_order(
                         symbol,
                         "market",
                         side,
-                        abs(contracts),
+                        contracts,
                         params={"reduceOnly": True, "positionSide": side_param},
                     )
                 except Exception as e:
                     self.notifier.alert(f"Failed to close {symbol}", str(e))
                     continue
-            self.notifier.info(f"[CLOSE] {symbol} {side} {abs(contracts)}")
+            self.notifier.info(f"[CLOSE] {symbol} {side} {contracts}")
 
     def cancel_pending(self, symbol=None):
         try:
@@ -190,3 +194,57 @@ class OrderManager:
         except Exception as e:
             logger.warning("cancel pending failed: %s", e)
             return []
+
+    def cancel_stale_orders(self, ttl=300, symbol=None):
+        if ttl <= 0:
+            return
+        try:
+            orders = self.exchange.fetch_open_orders(symbol)
+        except Exception:
+            return
+        now = time.time()
+        for o in orders:
+            if o.get("reduceOnly"):
+                continue
+            ts = o.get("timestamp")
+            if not ts:
+                continue
+            age = (now - ts / 1000.0) * 60 if ts > 1e12 else now - ts
+            if age > ttl:
+                try:
+                    self.exchange.cancel_order(o["id"], o["symbol"])
+                    self.notifier.info(f"[CANCEL-STALE] {o['symbol']} age={age/60:.1f}m")
+                except Exception as e:
+                    logger.warning("cancel stale %s failed: %s", o["id"], e)
+
+    def _open_algo_orders(self, symbol):
+        try:
+            s = symbol.replace("/USDT:USDT", "USDT")
+            return self.exchange.client.fapiPrivateGetOpenAlgoOrders({"symbol": s}) or []
+        except Exception:
+            return []
+
+    def ensure_sl_tp(self, symbol, side, entry, amount, atr=None):
+        if not self.cfg["reduce_only_on_close"]:
+            return
+        try:
+            tp_price = self.risk.build_take_profit(entry, side, atr)
+            sl_price = self.risk.build_stop_loss(entry, side, atr)
+            tp_side = "sell" if side == "buy" else "buy"
+            algo = self._open_algo_orders(symbol)
+            has_sl = any(
+                (o.get("orderType") or "").startswith("STOP") and float(o.get("quantity") or 0) > 0
+                for o in algo
+            )
+            if not has_sl:
+                self._place_stop(symbol, tp_side, amount, sl_price)
+                self.notifier.info(f"[SL-GUARD] pasang ulang SL {symbol} @ {sl_price}")
+            reg = self.exchange.fetch_open_orders(symbol) or []
+            has_tp = any(
+                o.get("reduceOnly") and str(o.get("side") or "").lower() == tp_side for o in reg
+            )
+            if not has_tp:
+                self._place_reduce_only(symbol, "limit", tp_side, amount, price=tp_price)
+                self.notifier.info(f"[TP-GUARD] pasang ulang TP {symbol} @ {tp_price}")
+        except Exception as e:
+            self.notifier.alert(f"Guard SL/TP gagal {symbol}", str(e))

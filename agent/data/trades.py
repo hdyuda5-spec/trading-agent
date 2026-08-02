@@ -36,6 +36,23 @@ class TradeStore:
             )
             """
         )
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS experience (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                strategy TEXT,
+                setup TEXT,
+                outcome TEXT,
+                exit_reason TEXT,
+                pnl REAL,
+                pnl_pct REAL,
+                lesson TEXT
+            )
+            """
+        )
         self._db.commit()
 
     def record_trade(self, symbol, side, entry, exit_px, qty, pnl, pnl_pct, reason, strategy="bot"):
@@ -55,6 +72,29 @@ class TradeStore:
                 (key, json.dumps(value), int(datetime.now(timezone.utc).timestamp())),
             )
             self._db.commit()
+
+    def add_experience(self, symbol, side, strategy, setup, outcome, exit_reason, pnl, pnl_pct, lesson):
+        ts = int(datetime.now(timezone.utc).timestamp())
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO experience (ts,symbol,side,strategy,setup,outcome,exit_reason,pnl,pnl_pct,lesson) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (ts, symbol, side, strategy, json.dumps(setup), outcome, exit_reason, pnl, pnl_pct, lesson),
+            )
+            self._db.commit()
+
+    def recent_lessons(self, limit=6):
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM experience ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        out = []
+        for r in rows:
+            out.append(
+                f"[{r[3]} {r[2]} via {r[4] or '-'}] {r[10]} "
+                f"(pnl {r[8]:+.2f} USDT, {r[9]:+.1f}%)"
+            )
+        return out
 
     def load_state(self, key, default=None):
         with self._lock:
