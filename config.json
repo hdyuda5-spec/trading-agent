@@ -27,11 +27,13 @@
     "take_profit_pct": 2.0,
     "stop_loss_pct": 1.0,
     "trailing_stop_pct": 1.5,
+    "use_atr_trailing": true,
+    "atr_trailing_mult": 2.0,
     "daily_loss_limit_pct": 5.0,
     "min_equity_usdt": 20,
     "max_open_positions": 3,
+    "skip_after_consecutive_losses": 3,
     "min_fee_tolerance_pct": 0.15,
-    "min_equity": 5.0,
     "use_atr_stops": true,
     "atr_period": 14,
     "atr_stop_mult": 1.5,
@@ -97,7 +99,28 @@
     "auto_interval_minutes": 30,
     "top_signal_cards": 3,
     "auto_trade": true,
-    "top_trade_candidates": 3
+    "top_trade_candidates": 3,
+    "require_confirmation": true,
+    "max_extended_pct": 30
+  },
+
+  "pattern": {
+    "enabled": true
+  },
+
+  "smart_money": {
+    "enabled": true,
+    "cvd_trades_limit": 500,
+    "orderbook_depth": 10
+  },
+
+  "whale": {
+    "enabled": true,
+    "interval_minutes": 30,
+    "min_notional_usdt": 50000,
+    "max_coins": 15,
+    "window_minutes": 30,
+    "min_alert_net_usdt": 50000
   },
 
   "reporting": {

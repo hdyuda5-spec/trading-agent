@@ -247,4 +247,7 @@ class OrderManager:
                 self._place_reduce_only(symbol, "limit", tp_side, amount, price=tp_price)
                 self.notifier.info(f"[TP-GUARD] pasang ulang TP {symbol} @ {tp_price}")
         except Exception as e:
+            if "ReduceOnly" in str(e) or "-2022" in str(e):
+                logger.info("SL/TP guard skipped for %s: position no longer open", symbol)
+                return
             self.notifier.alert(f"Guard SL/TP gagal {symbol}", str(e))

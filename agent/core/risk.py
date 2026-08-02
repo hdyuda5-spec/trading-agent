@@ -87,7 +87,12 @@ class RiskManager:
         min_eq = float(self.cfg.get("min_equity_usdt", 20))
         return min_eq > 0 and equity < min_eq
 
-    def trailing_stop_hit(self, side, best_price, current):
+    def trailing_stop_hit(self, side, best_price, current, atr=None):
+        if atr and atr > 0 and self.cfg.get("use_atr_trailing", False):
+            dist = self.cfg.get("atr_trailing_mult", 2.0) * atr
+            if side == "long":
+                return current <= best_price - dist
+            return current >= best_price + dist
         pct = self.cfg.get("trailing_stop_pct", 0.0) / 100.0
         if pct <= 0:
             return False

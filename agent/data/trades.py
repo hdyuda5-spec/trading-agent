@@ -96,6 +96,15 @@ class TradeStore:
             )
         return out
 
+    def recent_trades(self, symbol, side, limit=4):
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT pnl, ts FROM trades WHERE symbol=? AND side=? "
+                "ORDER BY id DESC LIMIT ?",
+                (symbol, side.lower(), limit),
+            ).fetchall()
+        return [{"pnl": float(r[0]), "ts": r[1]} for r in rows]
+
     def load_state(self, key, default=None):
         with self._lock:
             row = self._db.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()

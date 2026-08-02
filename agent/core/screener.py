@@ -1,3 +1,5 @@
+from agent.core.patterns import detect_patterns
+from agent.core.smart_money import SmartMoneyAnalyzer
 from agent.core.utils import compute_atr, compute_ema, compute_rsi, ohlcv_to_dataframe
 
 
@@ -8,6 +10,7 @@ class Screener:
         self.timeframe = cfg.get("timeframe", "1h")
         self.max_coins = int(cfg.get("max_coins", 10))
         self.min_volume_usdt = float(cfg.get("min_volume_usdt", 0))
+        self.smart_money = SmartMoneyAnalyzer(exchange, config)
 
     def candidates(self, limit=None):
         limit = limit or self.max_coins
@@ -58,6 +61,8 @@ class Screener:
                 "chg": round(chg, 2),
                 "price": float(close.iloc[-1]),
                 "atr": float(compute_atr(df, 14).iloc[-1]) if len(df) > 15 else 0.0,
+                "pattern": detect_patterns(df),
+                "smart_money": self.smart_money.analyze(symbol, df),
             }
         except Exception:
             return None
@@ -65,7 +70,12 @@ class Screener:
     def format(self, results, title="Screening"):
         lines = [title]
         for i, r in enumerate(results, 1):
+            pat = r.get("pattern") or {}
+            pat_txt = f" {pat['name']}" if pat.get("name") else ""
+            sm = r.get("smart_money") or {}
+            sm_dir = sm.get("direction") if sm else None
+            sm_txt = f" sm={sm_dir}" if sm_dir and sm_dir != "NEUTRAL" else ""
             lines.append(
-                f"{i}. {r['symbol']} {r['trend']} rsi={r['rsi']} vol_x{r['vol']} 25c={r['chg']}%"
+                f"{i}. {r['symbol']} {r['trend']} rsi={r['rsi']} vol_x{r['vol']} 25c={r['chg']}%{pat_txt}{sm_txt}"
             )
         return "\n".join(lines) if len(lines) > 1 else f"{title}: tidak ada kandidat"

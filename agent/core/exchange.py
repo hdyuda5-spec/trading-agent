@@ -102,6 +102,9 @@ class ExchangeClient:
     def fetch_order_book(self, symbol, limit=5):
         return self.client.fetch_order_book(symbol, limit)
 
+    def fetch_trades(self, symbol, limit=500):
+        return self.client.fetch_trades(symbol, limit=limit)
+
     def check_health(self):
         try:
             self.client.fetch_time()

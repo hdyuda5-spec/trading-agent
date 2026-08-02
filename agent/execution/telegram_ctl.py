@@ -1,3 +1,4 @@
+import re
 import threading
 import time
 
@@ -83,7 +84,7 @@ class TelegramController:
         threading.Thread(target=run, daemon=True).start()
 
     def _handle(self, text):
-        cmd = text.split()[0].split("@")[0].lower()
+        cmd = self._extract_command(text)
         handlers = {
             "/start": self._instruksi,
             "/help": self._help,
@@ -105,6 +106,11 @@ class TelegramController:
         }
         handler = handlers.get(cmd)
         return handler() if handler else self._help()
+
+    @staticmethod
+    def _extract_command(text):
+        match = re.search(r"/([A-Za-z0-9_]+)", text or "")
+        return f"/{match.group(1).lower()}" if match else None
 
     def _help(self):
         return (
