@@ -25,3 +25,9 @@ Thumbs.db
 
 # Test artifacts
 *.log
+
+# Nested frontend repo (Siftly) — project terpisah, bukan bagian repo ini
+agent/setup agent/
+
+# Live config backup (jangan di-commit)
+config.local.json.bak
