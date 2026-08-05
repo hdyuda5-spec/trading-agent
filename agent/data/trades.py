@@ -27,6 +27,9 @@ class TradeStore:
             )
             """
         )
+        cols = [r[1] for r in self._db.execute("PRAGMA table_info(trades)").fetchall()]
+        if "confidence" not in cols:
+            self._db.execute("ALTER TABLE trades ADD COLUMN confidence REAL")
         self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS state (
@@ -55,13 +58,13 @@ class TradeStore:
         )
         self._db.commit()
 
-    def record_trade(self, symbol, side, entry, exit_px, qty, pnl, pnl_pct, reason, strategy="bot"):
+    def record_trade(self, symbol, side, entry, exit_px, qty, pnl, pnl_pct, reason, strategy="bot", confidence=None):
         ts = int(datetime.now(timezone.utc).timestamp())
         with self._lock:
             self._db.execute(
-                "INSERT INTO trades (ts,symbol,side,strategy,entry,exit,qty,pnl,pnl_pct,reason) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (ts, symbol, side, strategy, entry, exit_px, qty, pnl, pnl_pct, reason),
+                "INSERT INTO trades (ts,symbol,side,strategy,entry,exit,qty,pnl,pnl_pct,reason,confidence) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (ts, symbol, side, strategy, entry, exit_px, qty, pnl, pnl_pct, reason, confidence),
             )
             self._db.commit()
 
@@ -76,10 +79,18 @@ class TradeStore:
     def add_experience(self, symbol, side, strategy, setup, outcome, exit_reason, pnl, pnl_pct, lesson):
         ts = int(datetime.now(timezone.utc).timestamp())
         with self._lock:
-            self._db.execute(
+            cur = self._db.execute(
                 "INSERT INTO experience (ts,symbol,side,strategy,setup,outcome,exit_reason,pnl,pnl_pct,lesson) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (ts, symbol, side, strategy, json.dumps(setup), outcome, exit_reason, pnl, pnl_pct, lesson),
+            )
+            self._db.commit()
+            return cur.lastrowid
+
+    def update_experience(self, exp_id, lesson):
+        with self._lock:
+            self._db.execute(
+                "UPDATE experience SET lesson=? WHERE id=?", (lesson, exp_id)
             )
             self._db.commit()
 
@@ -128,6 +139,36 @@ class TradeStore:
             "avg_win": round(gross_win / len(wins), 4) if wins else 0,
             "avg_loss": round(gross_loss / len(losses), 4) if losses else 0,
         }
+
+    def confidence_breakdown(self):
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT confidence, pnl, strategy FROM trades WHERE confidence IS NOT NULL"
+            ).fetchall()
+        if not rows:
+            return []
+        ranges = [(0, 65, "0-65"), (65, 75, "65-75"), (75, 90, "75-90"), (90, 101, "90+")]
+        out = []
+        for lo, hi, label in ranges:
+            bucket = [r for r in rows if lo <= float(r[0]) < hi]
+            if not bucket:
+                continue
+            pnls = [float(r[1]) for r in bucket]
+            wins = [p for p in pnls if p > 0]
+            strategies = {}
+            for r in bucket:
+                strategies[r[2]] = strategies.get(r[2], 0) + 1
+            out.append(
+                {
+                    "range": label,
+                    "trades": len(pnls),
+                    "wins": len(wins),
+                    "win_rate": round(len(wins) / len(pnls) * 100, 1),
+                    "net_pnl": round(sum(pnls), 4),
+                    "strategies": ", ".join(f"{k}={v}" for k, v in sorted(strategies.items())),
+                }
+            )
+        return out
 
     def close(self):
         with self._lock:

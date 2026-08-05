@@ -52,7 +52,9 @@ class ExchangeClient:
     def _testnet_config(self):
         return {}
 
-    def fetch_ohlcv(self, symbol, timeframe="15m", limit=200):
+    def fetch_ohlcv(self, symbol, timeframe="15m", limit=200, since=None):
+        if since is not None:
+            return self.client.fetch_ohlcv(symbol, timeframe, since=since, limit=limit)
         return self.client.fetch_ohlcv(symbol, timeframe, limit=limit)
 
     def fetch_balance(self):
@@ -104,6 +106,9 @@ class ExchangeClient:
 
     def fetch_trades(self, symbol, limit=500):
         return self.client.fetch_trades(symbol, limit=limit)
+
+    def fetch_my_trades(self, symbol, limit=10, since=None):
+        return self.client.fetch_my_trades(symbol, limit=limit, since=since)
 
     def check_health(self):
         try:

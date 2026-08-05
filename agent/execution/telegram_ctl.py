@@ -97,6 +97,8 @@ class TelegramController:
             "/orders": self._orders,
             "/balance": self._balance,
             "/metrics": self._metrics,
+            "/confidence": self._confidence,
+            "/conf": self._confidence,
             "/trades": self._trades,
             "/memori": self._memori,
             "/lessons": self._memori,
@@ -120,6 +122,7 @@ class TelegramController:
             "/orders - SL/TP per posisi\n"
             "/balance - saldo USDT\n"
             "/metrics - win rate & PnL\n"
+            "/confidence - win rate per range confidence\n"
             "/trades - riwayat trade terakhir\n"
             "/memori - pelajaran dari kesalahan\n"
             "/trend - arah tren tiap simbol\n"
@@ -205,6 +208,18 @@ class TelegramController:
             f"Net PnL: {metrics['net_pnl']}\n"
             f"Avg win: {metrics['avg_win']} / Avg loss: {metrics['avg_loss']}"
         )
+
+    def _confidence(self):
+        breakdown = self.bot.store.confidence_breakdown()
+        if not breakdown:
+            return "Belum ada trade dengan confidence tercatat. (Mulai tercatat untuk trade baru setelah update ini.)"
+        lines = ["🎯 Win rate per range confidence:"]
+        for b in breakdown:
+            lines.append(
+                f"- conf {b['range']}: {b['trades']} trade | win {b['win_rate']}% "
+                f"({b['wins']}W) | PnL {b['net_pnl']:+.2f} | {b['strategies']}"
+            )
+        return "\n".join(lines)
 
     def _trend(self):
         lines = []

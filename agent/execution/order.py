@@ -1,6 +1,8 @@
 import logging
 import time
 
+from agent.core.utils import is_valid_atr
+
 logger = logging.getLogger("trading-agent")
 
 
@@ -10,6 +12,7 @@ class OrderManager:
         self.risk = risk
         self.cfg = config["execution"]
         self.notifier = notifier
+        self._sl_tp = {}
 
     def _position_side(self, side):
         if self.cfg.get("position_mode", "one-way") == "hedge":
@@ -17,6 +20,9 @@ class OrderManager:
         return None
 
     def open_position(self, symbol, signal, equity, atr=None):
+        if not is_valid_atr(atr):
+            self.notifier.info(f"[SKIP] {symbol}: ATR invalid ({atr}), entry dibatalkan")
+            return None
         side = "buy" if signal["side"] == "LONG" else "sell"
         live_price = self._live_price(symbol)
         if live_price <= 0:
@@ -32,12 +38,13 @@ class OrderManager:
         for attempt in range(self.cfg["retry_attempts"]):
             try:
                 if order_type == "limit":
+                    price = self._best_book_price(symbol, side) or live_price
                     order = self.exchange.create_order(
                         symbol,
                         "limit",
                         side,
                         amount,
-                        price=live_price,
+                        price=price,
                         params={"postOnly": True},
                     )
                 else:
@@ -64,6 +71,19 @@ class OrderManager:
             return float(self.exchange.fetch_ticker(symbol)["last"] or 0)
         except Exception:
             return 0.0
+
+    def _best_book_price(self, symbol, side):
+        try:
+            book = self.exchange.fetch_order_book(symbol, 1)
+            if not book:
+                return None
+            if side == "buy" and book.get("bids"):
+                return float(book["bids"][0][0])
+            if side == "sell" and book.get("asks"):
+                return float(book["asks"][0][0])
+        except Exception:
+            pass
+        return None
 
     def _wait_fill(self, symbol, order):
         status = order.get("status")
@@ -107,6 +127,10 @@ class OrderManager:
                 return
             tp_price = self.risk.build_take_profit(entry_price, side, atr)
             sl_price = self.risk.build_stop_loss(entry_price, side, atr)
+            if tp_price is None or sl_price is None:
+                self.notifier.alert(f"Failed to place SL/TP {symbol}", "invalid ATR")
+                return
+            self._sl_tp[symbol] = {"sl": sl_price, "tp": tp_price}
             tp_side = "sell" if side == "buy" else "buy"
             self._place_reduce_only(symbol, "limit", tp_side, amount, price=tp_price)
             self._place_stop(symbol, tp_side, amount, sl_price)
@@ -230,6 +254,11 @@ class OrderManager:
         try:
             tp_price = self.risk.build_take_profit(entry, side, atr)
             sl_price = self.risk.build_stop_loss(entry, side, atr)
+            if tp_price is None or sl_price is None:
+                saved = self._sl_tp.get(symbol)
+                if not saved:
+                    return
+                tp_price, sl_price = saved["tp"], saved["sl"]
             tp_side = "sell" if side == "buy" else "buy"
             algo = self._open_algo_orders(symbol)
             has_sl = any(

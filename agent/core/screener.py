@@ -10,6 +10,7 @@ class Screener:
         self.timeframe = cfg.get("timeframe", "1h")
         self.max_coins = int(cfg.get("max_coins", 10))
         self.min_volume_usdt = float(cfg.get("min_volume_usdt", 0))
+        self.exclude_symbols = set(cfg.get("exclude_symbols", []))
         self.smart_money = SmartMoneyAnalyzer(exchange, config)
 
     def candidates(self, limit=None):
@@ -21,6 +22,8 @@ class Screener:
             return []
         for symbol, t in tickers.items():
             if not symbol.endswith("/USDT:USDT"):
+                continue
+            if symbol in self.exclude_symbols:
                 continue
             qv = float(t.get("quoteVolume") or 0)
             chg = float(t.get("percentage") or 0)

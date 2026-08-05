@@ -15,13 +15,15 @@ from agent.core.exchange import ExchangeClient
 from agent.core.utils import compute_adx, compute_atr, compute_ema, compute_rsi, ohlcv_to_dataframe
 
 # Fill rate limit order dari AUDIT Bagian A (simulasi postOnly best bid/ask, TTL 180 s):
-# hanya fraksi sinyal tersebut yang dianggap eksekusi di skenario limit order.
+# hanya sinyal dengan kandidat tersebut yang dianggap eksekusi di skenario limit order.
 PART_A_FILL_RATES = {
     "BTC/USDT:USDT": 0.476,
     "ETH/USDT:USDT": 0.475,
     "SNDK/USDT:USDT": 0.310,
 }
 PART_A_FILL_RATE_OVERALL = 0.406
+
+FUNDING_INTERVAL_SEC = 8 * 3600  # funding Binance USDT-M: 00:00/08:00/16:00 UTC
 
 
 class Backtester:
@@ -42,10 +44,8 @@ class Backtester:
         if fee is None:
             fee = 0.0005 if order_type == "market" else 0.0002
         self.fee = float(fee)
-        self._funding = []
+        self._funding = []  # list (ts_ms, funding_rate)
         self._funding_bar = None
-        self._trades = []
-        self._equity_curve = None
 
     # ------------------------------------------------------------------ data
     def load_data(self, days=90, testnet=True, timeframe=None):
@@ -83,7 +83,8 @@ class Backtester:
         return self.load_data(days=days, testnet=testnet, timeframe=tf)
 
     def load_funding_history(self, days=90, testnet=True):
-        """Riwayat funding rate Binance via ccxt.fetch_funding_rate_history (mainnet)."""
+        """Riwayat funding rate Binance via ccxt.fetch_funding_rate_history.
+        Perlu mainnet (funding riil), bukan testnet."""
         events = []
         ex = ExchangeClient(name=self.cfg["exchange"]["name"], testnet=testnet,
                             options=self.cfg["exchange"].get("options", {}))
@@ -105,7 +106,8 @@ class Backtester:
                     break
                 since = last + 1
         except Exception as e:
-            logging.getLogger("backtest").warning("funding history unavailable for %s: %s", self.symbol, e)
+            logger = logging.getLogger("backtest")
+            logger.warning("funding history unavailable for %s: %s", self.symbol, e)
         finally:
             ex.client.close()
         events.sort(key=lambda x: x[0])
@@ -114,12 +116,14 @@ class Backtester:
 
     @staticmethod
     def _index_ms(index):
+        """DatetimeIndex -> epoch milidetik. Toleran terhadap resolusi ns/ms."""
         vals = index.astype("int64")
-        if vals.max() > 1e16:
+        if vals.max() > 1e16:  # nanosecond resolution
             vals = vals // 10**6
         return vals
 
     def _build_funding_bar(self, df):
+        """sum funding rate per bar strategi: bar i diberi rate utk jendela (open[i-1], open[i]]."""
         n = len(df)
         arr = np.zeros(n)
         if not self._funding:
@@ -171,28 +175,10 @@ class Backtester:
 
     # ------------------------------------------------------------------ run
     def run(self, df, trend_df=None):
-        """Satu lintasan KONTINU (indikator, cooldown, RNG, posisi nyambung dari awal sampai akhir).
-        Trade dicatat dengan entry_bar global sehingga bisa dipartisi nanti."""
         strat = self.cfg["strategies"].get(self.strategy, {})
         if self.strategy == "momentum":
             return self._run_momentum(df, strat, trend_df)
-        if self.strategy == "mean_reversion":
-            return self._run_mean_reversion(df, strat, trend_df)
         raise NotImplementedError(f"strategy {self.strategy} not supported yet")
-
-    def run_split(self, df, trend_df=None, split_test=0.3):
-        """Metode BAKU: jalankan 1 lintasan full kontinu, lalu partisi trade
-        berdasarkan entry_bar ke train (< cut) / test (>= cut). Bukan run terisolasi."""
-        full = self.run(df, trend_df)
-        if not split_test or not 0 < split_test < 1:
-            return {"full": full}
-        cut = int(len(df) * (1 - split_test))
-        tr = [t for t in self._trades if t["entry_bar"] < cut]
-        te = [t for t in self._trades if t["entry_bar"] >= cut]
-        curve = self._equity_curve
-        train = self._subset_stats(tr, curve[:cut], len(df) * (1 - split_test))
-        test = self._subset_stats(te, curve[cut:], len(df) * split_test)
-        return {"full": full, "train": train, "test": test}
 
     def _run_momentum(self, df, strat, trend_df=None):
         ema_fast = strat.get("ema_fast", 9)
@@ -250,14 +236,15 @@ class Backtester:
         pos = None
         cooldown_until = -1
         trades = []
-        equity_curve = np.zeros(len(df))
+        self._trace = []
+        self._trades = trades
         slip = self.slippage
         funding_total = 0.0
 
         for i in range(warmup, len(df)):
             price = float(close.iloc[i])
             if pos:
-                entry, side, qty, best, stop, take, fund_acc, entry_i = pos
+                entry, side, qty, best, stop, take, fund_acc = pos
                 realized = False
                 if side == "long":
                     if price <= stop or (trail_pct and price <= best * (1 - trail_pct)):
@@ -277,9 +264,9 @@ class Backtester:
                     pnl = gross - self.fee * abs(qty) * (exit_px + entry) + fund_acc
                     equity += pnl
                     trades.append({
+                        "entry_idx": entry_i,
+                        "exit_idx": i,
                         "side": side,
-                        "entry_bar": entry_i,
-                        "exit_bar": i,
                         "pnl": pnl,
                         "pnl_pct": pnl / (entry * qty) * 100,
                         "funding": fund_acc,
@@ -289,8 +276,7 @@ class Backtester:
                 else:
                     r = float(funding_bar[i])
                     fund_acc += qty * price * (r if side == "short" else -r)
-                    pos = (entry, side, qty, best, stop, take, fund_acc, entry_i)
-                    equity_curve[i] = equity
+                    pos = (entry, side, qty, best, stop, take, fund_acc)
                     continue
             if i < len(df) - 1:
                 r = float(rsi.iloc[i])
@@ -327,182 +313,16 @@ class Backtester:
                     if self.order_type == "market":
                         entry = price * (1 + slip) if sig == "long" else price * (1 - slip)
                     else:
-                        entry = price
-                    pos = (entry, sig, qty, entry, stop, take, 0.0, i)
+                        entry = price  # limit: entry di level order (best bid/ask), tanpa slippage
+                    pos = (entry, sig, qty, entry, stop, take, 0.0)
                     entry_i = i
                     cooldown_until = i + int(cooldown)
-            equity_curve[i] = equity
             peak_equity = max(peak_equity, equity)
             max_dd = max(max_dd, (peak_equity - equity) / peak_equity)
 
-        self._trades = trades
-        self._equity_curve = equity_curve
-        return self._stats(df, trades, equity, max_dd, funding_total)
-
-    def _run_mean_reversion(self, df, strat, trend_df=None):
-        """Mean reversion: BB(20,2) + RSI(14).
-        Entry LONG: close <= lower band DAN RSI < 30. Entry SHORT: close >= upper band DAN RSI > 70.
-        Exit: kembali ke middle band (SMA20, dinamis), atau TP ATR static (atr_tp_mult).
-        SL: ATR-based dengan ATR-strict guard (ATR valid & > 0); tanpa floor lama."""
-        bb_period = int(strat.get("bb_period", 20))
-        bb_std = float(strat.get("bb_std", 2))
-        rsi_period = int(strat.get("rsi_period", 14))
-        rsi_oversold = float(strat.get("rsi_oversold", 30))
-        rsi_overbought = float(strat.get("rsi_overbought", 70))
-        cooldown = strat.get("cooldown_seconds", 900) / (CANDLE_TF[self.timeframe] or 900)
-        risk = self.cfg["risk"]
-        use_atr = risk.get("use_atr_stops", False)
-        atr_period = risk.get("atr_period", 14)
-        atr_stop = risk.get("atr_stop_mult", 1.5)
-        atr_tp = risk.get("atr_tp_mult", 2.5)
-        tp_pct = risk.get("take_profit_pct", 2.0) / 100.0
-        sl_pct = risk.get("stop_loss_pct", 1.0) / 100.0
-        max_pos_pct = risk.get("max_position_pct", 20) / 100.0
-
-        close = df["close"]
-        sma = close.rolling(bb_period).mean()
-        sd = close.rolling(bb_period).std()
-        upper = sma + bb_std * sd
-        lower = sma - bb_std * sd
-        rsi = compute_rsi(close, rsi_period)
-        atr = compute_atr(df, atr_period)
-
-        funding_bar = self._build_funding_bar(df)
-
-        warmup = max(bb_period, rsi_period, atr_period) + 3
-        equity = self.initial_equity
-        peak_equity = equity
-        max_dd = 0.0
-        pos = None
-        cooldown_until = -1
-        trades = []
-        equity_curve = np.zeros(len(df))
-        slip = self.slippage
-        funding_total = 0.0
-
-        for i in range(warmup, len(df)):
-            price = float(close.iloc[i])
-            if pos:
-                entry, side, qty, best, stop, take, fund_acc, entry_i = pos
-                mid = float(sma.iloc[i]) if not math.isnan(float(sma.iloc[i])) else entry
-                realized = False
-                if side == "long":
-                    if price >= mid or (take and price >= take) or price <= stop:
-                        realized = True
-                else:
-                    if price <= mid or (take and price <= take) or price >= stop:
-                        realized = True
-                if realized:
-                    exit_px = price * (1 - slip) if side == "long" else price * (1 + slip)
-                    gross = (exit_px - entry) * qty if side == "long" else (entry - exit_px) * qty
-                    pnl = gross - self.fee * abs(qty) * (exit_px + entry) + fund_acc
-                    equity += pnl
-                    trades.append({
-                        "side": side,
-                        "entry_bar": entry_i,
-                        "exit_bar": i,
-                        "pnl": pnl,
-                        "pnl_pct": pnl / (entry * qty) * 100,
-                        "funding": fund_acc,
-                    })
-                    funding_total += fund_acc
-                    pos = None
-                else:
-                    r = float(funding_bar[i])
-                    fund_acc += qty * price * (r if side == "short" else -r)
-                    pos = (entry, side, qty, best, stop, take, fund_acc, entry_i)
-                    equity_curve[i] = equity
-                    continue
-            if i < len(df) - 1:
-                r = float(rsi.iloc[i])
-                lo = float(lower.iloc[i])
-                hi = float(upper.iloc[i])
-                sig = None
-                if not math.isnan(lo) and not math.isnan(hi):
-                    if price <= lo and r < rsi_oversold:
-                        sig = "long"
-                    elif price >= hi and r > rsi_overbought:
-                        sig = "short"
-                if sig and i >= cooldown_until:
-                    if self.order_type == "limit" and self.fill_rate < 1.0:
-                        if self.rng.random() > self.fill_rate:
-                            sig = None
-                if sig and i >= cooldown_until:
-                    qty = (equity * max_pos_pct) / price
-                    a = float(atr.iloc[i])
-                    if use_atr and a > 0:
-                        stop = price - atr_stop * a if sig == "long" else price + atr_stop * a
-                        take = price + atr_tp * a if sig == "long" else price - atr_tp * a
-                    else:
-                        stop = price * (1 - sl_pct) if sig == "long" else price * (1 + sl_pct)
-                        take = price * (1 + tp_pct) if sig == "long" else price * (1 - tp_pct)
-                    if self.order_type == "market":
-                        entry = price * (1 + slip) if sig == "long" else price * (1 - slip)
-                    else:
-                        entry = price
-                    pos = (entry, sig, qty, entry, stop, take, 0.0, i)
-                    entry_i = i
-                    cooldown_until = i + int(cooldown)
-            equity_curve[i] = equity
-            peak_equity = max(peak_equity, equity)
-            max_dd = max(max_dd, (peak_equity - equity) / peak_equity)
-
-        self._trades = trades
-        self._equity_curve = equity_curve
         return self._stats(df, trades, equity, max_dd, funding_total)
 
     def _stats(self, df, trades, equity, max_dd, funding_total=0.0):
-        base = {
-            "symbol": self.symbol,
-            "timeframe": self.timeframe,
-            "strategy": self.strategy,
-            "order_type": self.order_type,
-            "fill_rate": self.fill_rate,
-            "slippage_pct": round(self.slippage * 100, 3),
-            "bars": len(df),
-            "period_days": round(len(df) * (CANDLE_TF[self.timeframe] or 900) / 86400, 1),
-        }
-        st = self._trade_stats(trades)
-        st.update({
-            "net_pnl": round(equity - self.initial_equity, 2),
-            "total_return_pct": round((equity / self.initial_equity - 1) * 100, 2),
-            "max_drawdown_pct": round(max_dd * 100, 2),
-        })
-        st.update(base)
-        return st
-
-    def _subset_stats(self, trades, equity_curve_seg, bars):
-        """Statistik segmen (train/test) dari subset trade lintasan kontinu.
-        net_pnl & return = atribusi sederhana (sum pnl), max_dd dari kurva equity segmen."""
-        base = {
-            "symbol": self.symbol,
-            "timeframe": self.timeframe,
-            "strategy": self.strategy,
-            "order_type": self.order_type,
-            "fill_rate": self.fill_rate,
-            "slippage_pct": round(self.slippage * 100, 3),
-            "bars": int(bars),
-            "period_days": round(bars * (CANDLE_TF[self.timeframe] or 900) / 86400, 1),
-        }
-        st = self._trade_stats(trades)
-        curve = np.asarray(equity_curve_seg, dtype="float64")
-        curve = curve[curve > 0]
-        mdd = 0.0
-        if len(curve):
-            peak = 0.0
-            for v in curve:
-                peak = max(peak, v)
-                mdd = max(mdd, (peak - v) / peak)
-        sum_pnl = st.pop("_sum_pnl")
-        st.update({
-            "net_pnl": round(sum_pnl, 2),
-            "total_return_pct": round(sum_pnl / self.initial_equity * 100, 2),
-            "max_drawdown_pct": round(mdd * 100, 2),
-        })
-        st.update(base)
-        return st
-
-    def _trade_stats(self, trades):
         pnls = [t["pnl"] for t in trades]
         wins = [p for p in pnls if p > 0]
         losses = [p for p in pnls if p < 0]
@@ -516,21 +336,32 @@ class Backtester:
         avg_loss = sum(loss_pct) / len(loss_pct) if loss_pct else 0.0
         expectancy = win_rate * avg_win + (1 - win_rate) * avg_loss
         return {
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "strategy": self.strategy,
+            "order_type": self.order_type,
+            "fill_rate": self.fill_rate,
+            "slippage_pct": round(self.slippage * 100, 3),
+            "bars": len(df),
+            "period_days": round(len(df) * (CANDLE_TF[self.timeframe] or 900) / 86400, 1),
             "trades": len(pnls),
             "win_rate": round(win_rate * 100, 1),
             "profit_factor": round(gross_win / gross_loss, 2) if gross_loss else None,
+            "net_pnl": round(equity - self.initial_equity, 2),
+            "total_return_pct": round((equity / self.initial_equity - 1) * 100, 2),
+            "max_drawdown_pct": round(max_dd * 100, 2),
             "avg_win_pct": round(avg_win, 3),
             "avg_loss_pct": round(avg_loss, 3),
             "expectancy_pct": round(expectancy, 4),
-            "funding_total": round(sum(t["funding"] for t in trades), 4),
-            "_sum_pnl": sum(pnls),
+            "funding_total": round(funding_total, 4),
         }
 
 
 CANDLE_TF = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
 
 
-def _apply_adx(config, adx_state, adx_min):
+def _run_backtest(config, symbol, days, equity, order_type, slippage_pct, fill_rate,
+                  adx_state, adx_min, use_funding, mainnet, split_test, timeframe, fee):
     adx_cfg = config.setdefault("trend_filter", {}).setdefault("adx_filter", {})
     if adx_state == "on":
         adx_cfg["enabled"] = True
@@ -539,29 +370,28 @@ def _apply_adx(config, adx_state, adx_min):
     if adx_min is not None:
         adx_cfg["min_adx"] = adx_min
 
-
-def _load_scenario(config, sym, days, mainnet, timeframe):
-    """Load OHLCV + trend + funding sekali per simbol, return (df, trend_df, funding_events)."""
-    bt = Backtester(config, sym, timeframe)
+    bt = Backtester(config, symbol, timeframe, "momentum", equity, fee=fee,
+                    order_type=order_type, slippage_pct=slippage_pct, fill_rate=fill_rate)
     df = bt.load_data(days=days, testnet=not mainnet)
     trend_df = None
     if config.get("trend_filter", {}).get("enabled", False):
         trend_df = bt.load_trend_data(days=days, testnet=not mainnet)
-    funding = bt.load_funding_history(days=days, testnet=False)
-    return df, trend_df, funding
+    if use_funding:
+        bt.load_funding_history(days=days, testnet=False)
 
-
-def _run_one(config, sym, df, trend_df, funding, days, equity, order_type, slippage_pct, fill_rate,
-             adx_state, adx_min, split_test, timeframe, fee, seed, strategy="momentum"):
-    _apply_adx(config, adx_state, adx_min)
-    bt = Backtester(config, sym, timeframe, strategy, equity, fee=fee, order_type=order_type,
-                    slippage_pct=slippage_pct, fill_rate=fill_rate, rng_seed=seed)
-    bt._funding = funding
-    return bt.run_split(df, trend_df, split_test)
+    results = {}
+    if split_test and 0 < split_test < 1:
+        cut = int(len(df) * (1 - split_test))
+        results["train"] = bt.run(df.iloc[:cut], trend_df)
+        results["test"] = bt.run(df.iloc[cut:], trend_df)
+        results["full"] = bt.run(df, trend_df)
+    else:
+        results["full"] = bt.run(df, trend_df)
+    return results
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Backtest momentum: 1 lintasan kontinu, partisi trade ke train/test")
+    parser = argparse.ArgumentParser(description="Backtest strategi momentum dengan data historis")
     parser.add_argument("--symbol", default="BTC/USDT:USDT")
     parser.add_argument("--symbols", default=None, help="Daftar simbol pisah koma; lebih dari satu => tabel perbandingan")
     parser.add_argument("--timeframe", default="15m")
@@ -571,9 +401,6 @@ def main():
     parser.add_argument("--fee", type=float, default=None)
     parser.add_argument("--mainnet", action="store_true", help="Pakai mainnet (default testnet)")
     parser.add_argument("--config", default="config.json")
-    parser.add_argument("--plain", action="store_true",
-                        help="EMA9/21 crossover MURNI: matikan trend filter, ADX, dan RSI filter. "
-                             "Sisakan hanya cross + cooldown + SL/TP ATR (whale filter tidak disimulasikan di backtest).")
     parser.add_argument("--adx-on", action="store_true", help="Paksa ADX filter aktif")
     parser.add_argument("--adx-off", action="store_true", help="Paksa ADX filter mati")
     parser.add_argument("--adx-min", type=float, default=None, help="Override min_adx")
@@ -583,7 +410,6 @@ def main():
     parser.add_argument("--split-test", type=float, default=0.3, help="Fraksi data terakhir sebagai test set (0=full only)")
     parser.add_argument("--no-funding", action="store_true", help="Nonaktifkan simulasi biaya funding")
     parser.add_argument("--compare", action="store_true", help="Bandingkan market vs limit utk semua simbol")
-    parser.add_argument("--seeds", type=int, default=20, help="Jumlah seed utk simulasi fill-rate limit")
     parser.add_argument("--json", default=None, help="Simpan hasil ke file json")
     args = parser.parse_args()
 
@@ -598,159 +424,90 @@ def main():
     adx_min = args.adx_min
     use_funding = not args.no_funding
 
-    if args.plain:
-        config["trend_filter"]["enabled"] = False
-        config["strategies"].setdefault("momentum", {})["require_rsi_filter"] = False
-        adx_state = "off"
-
     if args.compare:
         import collections
-        seeds = list(range(1, args.seeds + 1))
         out = collections.defaultdict(dict)
         for sym in symbols:
-            df, trend_df, funding = _load_scenario(config, sym, args.days, args.mainnet, args.timeframe)
-            for adx in (("off",) if args.plain else ("on", "off")):
-                res_m = _run_one(config, sym, df, trend_df, funding, args.days, args.equity,
-                                 "market", args.slippage_pct, None, adx, adx_min, args.split_test,
-                                 args.timeframe, args.fee, seed=1, strategy=args.strategy)
-                res_l = []
-                for s in seeds:
-                    r = _run_one(config, sym, df, trend_df, funding, args.days, args.equity,
-                                 "limit", args.slippage_pct, args.fill_rate, adx, adx_min,
-                                 args.split_test, args.timeframe, args.fee, seed=s, strategy=args.strategy)
-                    res_l.append(r)
-                out[(sym, adx)] = {"market": res_m, "limit": res_l}
-            print(f"done {sym}")
+            for ot in ("market", "limit"):
+                for adx in ("on", "off"):
+                    res = _run_backtest(config, sym, args.days, args.equity, ot, args.slippage_pct,
+                                        args.fill_rate, adx, adx_min, use_funding, args.mainnet,
+                                        args.split_test, args.timeframe, args.fee)
+                    out[(sym, adx)][ot] = res
         _print_compare(out, symbols)
         if args.json:
             with open(args.json, "w", encoding="utf-8") as f:
                 json.dump({f"{s}|{a}": v for (s, a), v in out.items()}, f, indent=2)
         return
 
-    _apply_adx(config, adx_state, adx_min)
+    adx_cfg = config.setdefault("trend_filter", {}).setdefault("adx_filter", {})
+    if args.adx_on:
+        adx_cfg["enabled"] = True
+    elif args.adx_off:
+        adx_cfg["enabled"] = False
+    if adx_min is not None:
+        adx_cfg["min_adx"] = adx_min
+
     for sym in symbols:
-        df, trend_df, funding = _load_scenario(config, sym, args.days, args.mainnet, args.timeframe)
-        res = _run_one(config, sym, df, trend_df, funding, args.days, args.equity,
-                       args.order_type, args.slippage_pct, args.fill_rate, adx_state, adx_min,
-                       args.split_test, args.timeframe, args.fee, seed=1, strategy=args.strategy)
-        for seg, r in res.items():
-            print(f"=== {sym} [{seg}] order={r['order_type']} ===")
-            for k, v in r.items():
+        bt = Backtester(config, sym, args.timeframe, args.strategy, args.equity, fee=args.fee,
+                        order_type=args.order_type, slippage_pct=args.slippage_pct, fill_rate=args.fill_rate)
+        df = bt.load_data(days=args.days, testnet=not args.mainnet)
+        trend_df = None
+        if config.get("trend_filter", {}).get("enabled", False):
+            trend_df = bt.load_trend_data(days=args.days, testnet=not args.mainnet)
+        if use_funding:
+            bt.load_funding_history(days=args.days, testnet=False)
+        if args.split_test and 0 < args.split_test < 1:
+            cut = int(len(df) * (1 - args.split_test))
+            for label, seg in (("train", df.iloc[:cut]), ("test", df.iloc[cut:]), ("full", df)):
+                print(f"=== {sym} [{label}] ===")
+                for k, v in bt.run(seg, trend_df).items():
+                    print(f"  {k}: {v}")
+        else:
+            print(f"=== {sym} ===")
+            for k, v in bt.run(df, trend_df).items():
                 print(f"  {k}: {v}")
 
 
-# ---------------------------------------------------------------- reporting
-def _agg(rs):
-    """rs = list of stat-dicts (satu lintasan full). Aggregasi mean/std/min/max utk
-    trades & expectancy & net_pnl per segmen."""
-    segs = {s: [] for s in ("train", "test", "full")}
-    for r in rs:
-        for s in segs:
-            if s in r:
-                segs[s].append(r[s])
-    out = {}
-    for s, items in segs.items():
-        if not items:
-            continue
-        exp = [i["expectancy_pct"] for i in items]
-        tr = [i["trades"] for i in items]
-        net = [i["net_pnl"] for i in items]
-        n = len(items)
-        e_mean = sum(exp) / n
-        e_std = (sum((x - e_mean) ** 2 for x in exp) / n) ** 0.5
-        out[s] = {
-            "trades_mean": round(sum(tr) / n, 1),
-            "trades_min": min(tr),
-            "trades_max": max(tr),
-            "exp_mean": e_mean,
-            "exp_std": e_std,
-            "exp_min": min(exp),
-            "exp_max": max(exp),
-            "net_mean": sum(net) / n,
-        }
-    return out
-
-
 def _print_compare(out, symbols):
+    def row(r):
+        if not r:
+            return None
+        return r
+
     print("\n==================== PERBANDINGAN MARKET vs LIMIT ====================")
-    print("Metode: 1 lintasan kontinu per seed, partisi trade by entry_bar (train<cut<=test).")
-    print("Limit: N seed -> expectancy dilaporkan mean±std dan [min,max]. Market: deterministik.\n")
     for sym in symbols:
         for adx in ("on", "off"):
             d = out.get((sym, adx), {})
-            m = d.get("market")
-            lm = d.get("limit")
-            print(f"### {sym}  |  ADX={'ON' if adx=='on' else 'OFF'}")
-            if m:
-                print("  MARKET:")
-                for seg in ("train", "test", "full"):
-                    if seg not in m:
+            print(f"\n### {sym}  |  ADX={'ON' if adx=='on' else 'OFF'}")
+            header = f"{'seg':<6} {'ord':<7} {'tr':>4} {'win%':>6} {'avgW%':>7} {'avgL%':>7} {'exp%':>8} {'fund':>8} {'net$':>9} {'ret%':>7} {'mdd%':>6}"
+            print(header)
+            for seg in ("train", "test", "full"):
+                for ot in ("market", "limit"):
+                    r = d.get(ot, {}).get(seg)
+                    if not r:
                         continue
-                    r = m[seg]
-                    print(f"    {seg:<5} trades={r['trades']:>4} win={r['win_rate']:>5}% "
-                          f"avgW={r['avg_win_pct']:>6}% avgL={r['avg_loss_pct']:>7}% "
-                          f"exp={r['expectancy_pct']:>9.4f}% net={r['net_pnl']:>9.1f}")
-            if lm:
-                a = _agg(lm)
-                print("  LIMIT (seed 1..%d):" % len(lm))
-                for seg in ("train", "test", "full"):
-                    if seg not in a:
-                        continue
-                    x = a[seg]
-                    print(f"    {seg:<5} trades={x['trades_mean']:>5} ({x['trades_min']}..{x['trades_max']}) "
-                          f"exp={x['exp_mean']:+.4f}±{x['exp_std']:.4f}% "
-                          f"[min={x['exp_min']:+.4f}, max={x['exp_max']:+.4f}] net_mean={x['net_mean']:+.1f}")
-            print()
-
-    print("\n--- RINGKASAN test expectancy (%/trade) ---")
-    print(f"{'ADX':<5} {'symbol':<22} {'mkt test':>10} {'lim test mean±std':>20} {'lim [min..max]':>20} {'winner':>8}")
+                    print(f"{seg:<6} {ot:<7} {r['trades']:>4} {r['win_rate']:>6} {r['avg_win_pct']:>7} {r['avg_loss_pct']:>7} "
+                          f"{r['expectancy_pct']:>8} {r['funding_total']:>8} {r['net_pnl']:>9} {r['total_return_pct']:>7} {r['max_drawdown_pct']:>6}")
+    # ringkasan expectancy rata-rata
+    print("\n--- RINGKASAN expectancy (%/trade, rata-rata antar simbol, segmen FULL) ---")
     for adx in ("on", "off"):
+        ex_m = []
+        ex_l = []
+        tr_m = 0
+        tr_l = 0
         for sym in symbols:
             d = out.get((sym, adx), {})
-            m = d.get("market", {}).get("test")
-            lm = d.get("limit")
-            if not m:
-                continue
-            if lm:
-                a = _agg(lm)
-                t = a.get("test")
-            else:
-                t = None
-            m_exp = m["expectancy_pct"]
-            if t:
-                l_mean, l_std, l_min, l_max = t["exp_mean"], t["exp_std"], t["exp_min"], t["exp_max"]
-                w = "LIMIT" if l_mean > m_exp else "MKT"
-                print(f"{'ON' if adx=='on' else 'OFF':<5} {sym:<22} {m_exp:>10.4f} "
-                      f"{l_mean:+.4f}±{l_std:.4f}  [{l_min:+.4f}..{l_max:+.4f}] {w:>8}")
-            else:
-                print(f"{'ON' if adx=='on' else 'OFF':<5} {sym:<22} {m_exp:>10.4f}  (n/a)")
-    # agregasi lintas simbol
-    print("\n--- AGREGASI antar simbol (test expectancy) ---")
-    for adx in ("on", "off"):
-        m_exp = []
-        l_mean = []
-        l_min_all = []
-        l_max_all = []
-        for sym in symbols:
-            d = out.get((sym, adx), {})
-            m = d.get("market", {}).get("test")
-            lm = d.get("limit")
-            if not m:
-                continue
-            m_exp.append(m["expectancy_pct"])
-            if lm:
-                t = _agg(lm).get("test")
-                if t:
-                    l_mean.append(t["exp_mean"])
-                    l_min_all.append(t["exp_min"])
-                    l_max_all.append(t["exp_max"])
-        if m_exp:
-            mm = sum(m_exp) / len(m_exp)
-            ml = sum(l_mean) / len(l_mean) if l_mean else 0
-            lo = min(l_min_all) if l_min_all else 0
-            hi = max(l_max_all) if l_max_all else 0
-            print(f"ADX={'ON' if adx=='on' else 'OFF'}: mkt test mean = {mm:+.4f}% | "
-                  f"limit test mean = {ml:+.4f}% (kisaran seed: {lo:+.4f}% .. {hi:+.4f}%)")
+            rm = d.get("market", {}).get("full")
+            rl = d.get("limit", {}).get("full")
+            if rm:
+                ex_m.append(rm["expectancy_pct"])
+                tr_m += rm["trades"]
+            if rl:
+                ex_l.append(rl["expectancy_pct"])
+                tr_l += rl["trades"]
+        print(f"ADX={adx.upper()}: market mean exp = {sum(ex_m)/len(ex_m) if ex_m else 0:.4f}% (trades {tr_m}) | "
+              f"limit mean exp = {sum(ex_l)/len(ex_l) if ex_l else 0:.4f}% (trades {tr_l})")
 
 
 if __name__ == "__main__":

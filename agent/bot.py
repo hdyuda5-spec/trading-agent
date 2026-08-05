@@ -4,10 +4,11 @@ import threading
 import time
 
 from agent.core.exchange import ExchangeClient
+from agent.core.reflector import Reflector
 from agent.core.risk import RiskManager
 from agent.core.screener import Screener
 from agent.core.trend import TrendFilter
-from agent.core.utils import compute_atr, ohlcv_to_dataframe
+from agent.core.utils import compute_atr, is_valid_atr, ohlcv_to_dataframe
 from agent.core.whale import WhaleDetector, should_execute_trade
 from agent.data.trades import TradeStore
 from agent.execution.notifier import Notifier, fmt_wib
@@ -32,6 +33,12 @@ class TradingBot:
         self.strategies = build_strategies(config, self.exchange, self.notifier)
         self.trend = TrendFilter(self.exchange, config)
         self.store = TradeStore()
+        self.reflector = Reflector(
+            config,
+            config.get("strategies", {}).get("ai_signal", {}),
+            self.notifier,
+            self.store,
+        )
         self.telegram = TelegramController(self)
         self.interval = config["execution"]["poll_interval_seconds"]
         self.one_per_symbol = config["execution"].get("one_position_per_symbol", True)
@@ -44,10 +51,12 @@ class TradingBot:
         self.trailing = self.store.load_state("trailing", {}) or {}
         self._position_strategy = {}
         self._position_setup = {}
+        self._position_confidence = {}
         self._last_auto_screen = self.store.load_state("last_auto_screen", 0.0) or 0.0
         self._last_whale_scan = 0.0
         self.whale = WhaleDetector(self.exchange, config, self.notifier)
         self._positions = {}
+        self._closed_at = {}
         self._dfs = {}
         self._last_metrics_day = ""
         self._start_time = time.time()
@@ -69,12 +78,20 @@ class TradingBot:
             self.store.save_state("equity_baseline", {"date": today, "equity": equity})
         self.risk.set_initial_equity(self.initial_equity)
         self.telegram.start()
+        self._reconcile_stale_trailing()
         while True:
             try:
                 self.tick()
             except Exception as e:
                 self.notifier.alert("Tick error", str(e))
             time.sleep(self.interval)
+
+    def _atr_of(self, df):
+        try:
+            atr = float(compute_atr(df, self.config["risk"].get("atr_period", 14)).iloc[-1])
+        except Exception:
+            return None
+        return atr if is_valid_atr(atr) else None
 
     def tick(self):
         self._last_tick = time.time()
@@ -118,7 +135,7 @@ class TradingBot:
             ttl=self.config["execution"].get("order_ttl_seconds", 0),
             symbol=None if self._grid_enabled() else None,
         )
-        min_eq = self.config["risk"].get("min_equity", 0)
+        min_eq = self._min_equity
         low_equity = min_eq > 0 and equity < min_eq
         if low_equity and not self._low_equity_notified:
             self.notifier.alert(
@@ -135,7 +152,7 @@ class TradingBot:
             df = self._dfs.get(symbol)
             if df is None or len(df) < atr_period + 2:
                 continue
-            atr = float(compute_atr(df, atr_period).iloc[-1])
+            atr = self._atr_of(df)
             self._run_momentum_and_ai(symbol, df, positions, equity, atr)
             self._run_grid(symbol, positions, equity, atr)
         self.store.save_state("trailing", self.trailing)
@@ -217,10 +234,16 @@ class TradingBot:
                     break
                 if r["trend"] == "NEUTRAL" or not r.get("price"):
                     continue
-                entry = r["price"]
                 atr = r.get("atr") or 0.0
+                if not is_valid_atr(atr):
+                    self.notifier.info(f"Auto-screen skip {r['symbol']}: ATR invalid")
+                    continue
+                entry = r["price"]
                 sl = self.risk.build_stop_loss(entry, r["trend"], atr)
                 tp1 = self.risk.build_take_profit(entry, r["trend"], atr)
+                if sl is None or tp1 is None:
+                    self.notifier.info(f"Auto-screen skip {r['symbol']}: SL/TP tidak valid")
+                    continue
                 tp2 = tp1 + (tp1 - entry)
                 self.notifier.send_signal(r["symbol"], r["trend"], entry, sl, tp1, tp2, "screener")
                 count += 1
@@ -237,7 +260,7 @@ class TradingBot:
             equity = self._equity()
         except Exception:
             return
-        min_eq = self.config["risk"].get("min_equity", 0)
+        min_eq = self._min_equity
         if min_eq > 0 and equity < min_eq:
             self.notifier.info(f"Auto-trade skip: equity {equity:.2f} < min_equity {min_eq}")
             return
@@ -257,12 +280,23 @@ class TradingBot:
                 if any(abs(float(p.get("contracts") or 0)) > 0 and p.get("symbol") == symbol for p in positions):
                     self.notifier.info(f"Auto-trade skip {symbol}: posisi sudah terbuka")
                     continue
-                if (side == "LONG" and r["rsi"] >= 70) or (side == "SHORT" and r["rsi"] <= 30):
-                    self.notifier.info(f"Auto-trade skip {symbol}: rsi={r['rsi']} (overbought/oversold)")
-                    continue
+                sc = self.config.get("screener", {})
+                if sc.get("rsi_confirmation", False):
+                    long_r = sc.get("rsi_long_range", [40, 75])
+                    short_r = sc.get("rsi_short_range", [25, 60])
+                    rsi = r["rsi"]
+                    if side == "LONG" and not (long_r[0] <= rsi <= long_r[1]):
+                        self.notifier.info(f"Auto-trade skip {symbol}: rsi={rsi:.1f} di luar range LONG {long_r}")
+                        continue
+                    if side == "SHORT" and not (short_r[0] <= rsi <= short_r[1]):
+                        self.notifier.info(f"Auto-trade skip {symbol}: rsi={rsi:.1f} di luar range SHORT {short_r}")
+                        continue
                 max_ext = float(self.config.get("screener", {}).get("max_extended_pct", 0))
                 if max_ext > 0 and abs(float(r["chg"])) > max_ext:
                     self.notifier.info(f"Auto-trade skip {symbol}: move {r['chg']}% terlalu ekstrem")
+                    continue
+                if not is_valid_atr(r.get("atr")):
+                    self.notifier.info(f"Auto-trade skip {symbol}: ATR invalid")
                     continue
                 if self._losing_streak(symbol, side):
                     self.notifier.info(f"Auto-trade skip {symbol}: pola kalah beruntun")
@@ -270,6 +304,9 @@ class TradingBot:
                 wok, wreason = self._whale_filter_ok(symbol, side)
                 if not wok:
                     self.notifier.info(f"Auto-trade skip {symbol}: {wreason}")
+                    continue
+                if not self._market_regime_allows(side):
+                    self.notifier.info(f"Auto-trade skip {symbol}: market regime memblokir {side}")
                     continue
                 ok, equity_eff, reason = self._screen_trade_ok(symbol, side, r["price"], r.get("atr") or 0.0, equity, positions)
                 if not ok:
@@ -295,7 +332,8 @@ class TradingBot:
                     },
                 }
                 self._position_strategy[symbol] = "screener"
-                self._position_setup[symbol] = self._capture_setup(symbol, side, r["price"], r.get("atr") or 0.0, signal.get("metadata"))
+                self._position_setup[symbol] = self._capture_setup(symbol, side, r["price"], r.get("atr") or 0.0, signal.get("metadata"), 70.0)
+                self._position_confidence[symbol] = 70.0
                 self.orders.open_position(symbol, signal, equity_eff, r.get("atr") or 0.0)
                 count += 1
 
@@ -332,7 +370,26 @@ class TradingBot:
         }
         signal = "BUY" if side == "LONG" else "SELL"
         min_txns = int(wcfg.get("min_whale_txns", 3))
-        return should_execute_trade(signal, whale_data, min_txns)
+        min_net = float(wcfg.get("min_alert_net_usdt", 0))
+        return should_execute_trade(signal, whale_data, min_txns, min_net)
+
+    def _market_regime_allows(self, side):
+        wcfg = self.config.get("whale", {})
+        reg = wcfg.get("market_regime", {})
+        if not reg.get("enabled", False):
+            return True
+        threshold = float(reg.get("net_sell_threshold_usdt", 0))
+        min_symbols = int(reg.get("min_symbols", 5))
+        total, with_data = self.whale.market_net_flow(self._whale_symbols)
+        if with_data < min_symbols:
+            return True
+        if total <= -threshold and side == "LONG":
+            logger.info("[REGIME] skip LONG: aggregate whale net sell %+.0f USDT", total)
+            return False
+        if total >= threshold and side == "SHORT":
+            logger.info("[REGIME] skip SHORT: aggregate whale net buy %+.0f USDT", total)
+            return False
+        return True
 
     def _screen_trade_ok(self, symbol, side, price, atr, equity, positions):
         m = self.exchange.client.markets.get(symbol)
@@ -429,25 +486,25 @@ class TradingBot:
             if peak is None or (side == "long" and last > peak) or (side == "short" and last < peak):
                 peak = last
             self.trailing[symbol] = {"side": side, "peak": peak, "entry": entry}
-            atr = None
-            df = self._dfs.get(symbol)
-            if df is not None and len(df) > 2:
-                try:
-                    atr = float(compute_atr(df, self.config["risk"].get("atr_period", 14)).iloc[-1])
-                except Exception:
-                    atr = None
+            atr = self._atr_of(self._dfs.get(symbol)) if self._dfs.get(symbol) is not None else None
             if self.risk.trailing_stop_hit(side, peak, last, atr):
                 self.notifier.info(f"[TRAILING] closing {symbol} {side} at {last}")
                 self._close_position(pos, "trailing", last)
         self._detect_external_closes(positions)
+        now = time.time()
         self._positions = {
-            p.get("symbol"): p for p in positions if abs(float(p.get("contracts") or 0)) > 0
+            p.get("symbol"): p
+            for p in positions
+            if abs(float(p.get("contracts") or 0)) > 0
+            and now - self._closed_at.get(p.get("symbol"), 0) >= 1800
         }
 
     def _detect_external_closes(self, positions):
         current = {p.get("symbol") for p in positions if abs(float(p.get("contracts") or 0)) > 0}
         for symbol, old in list(self._positions.items()):
             if symbol in current:
+                continue
+            if time.time() - self._closed_at.get(symbol, 0) < 1800:
                 continue
             self._positions.pop(symbol, None)
             self._close_position(old, "sl_tp")
@@ -468,27 +525,48 @@ class TradingBot:
             entry = float(pos.get("entryPrice") or 0)
             if entry <= 0:
                 continue
-            atr = None
-            df = self._dfs.get(symbol)
-            if df is not None and len(df) >= 2:
-                try:
-                    atr = float(compute_atr(df, self.config["risk"].get("atr_period", 14)).iloc[-1])
-                except Exception:
-                    atr = None
+            atr = self._atr_of(self._dfs.get(symbol)) if self._dfs.get(symbol) is not None else None
             self.orders.ensure_sl_tp(symbol, side, entry, contracts, atr)
 
     def _close_position(self, pos, reason, price=0.0):
         symbol = pos.get("symbol")
         if not symbol:
             return
+        self._closed_at[symbol] = time.time()
         try:
             live = self.exchange.fetch_positions([symbol])
         except Exception:
             live = []
         live_pos = next((p for p in live if abs(float(p.get("contracts") or 0)) > 0), None)
         if live_pos is None:
+            contracts = abs(float(pos.get("contracts") or 0))
+            entry = float(pos.get("entryPrice") or 0)
+            side = self._pos_side(pos)
+            if contracts > 0 and entry > 0:
+                if price <= 0:
+                    price = (
+                        self._fill_exit_price(symbol, side)
+                        or self._last_close_price(symbol)
+                        or self._price(symbol)
+                    )
+                if price > 0:
+                    pnl = (price - entry) * contracts if side == "long" else (entry - price) * contracts
+                    pnl_pct = (pnl / (entry * contracts)) * 100 if entry and contracts else 0.0
+                    strategy = self._position_strategy.pop(symbol, "bot")
+                    setup = self._position_setup.pop(symbol, {})
+                    if setup.get("confidence") is None:
+                        setup["confidence"] = self._position_confidence.pop(symbol, None)
+                    else:
+                        self._position_confidence.pop(symbol, None)
+                    self.store.record_trade(
+                        symbol, side, entry, price, contracts, pnl, pnl_pct, reason, strategy, setup.get("confidence")
+                    )
+                    self._record_experience(symbol, side, strategy, setup, pnl, pnl_pct, reason)
+                    self.notifier.info(f"[CLOSE:{reason}] {symbol} {side} pnl={pnl:.2f} ({pnl_pct:.1f}%)")
+                    self.notifier.send_close(symbol, side, entry, price, contracts, pnl, pnl_pct, reason, strategy)
             self._position_strategy.pop(symbol, None)
             self._position_setup.pop(symbol, None)
+            self._position_confidence.pop(symbol, None)
             self._positions.pop(symbol, None)
             self.trailing.pop(symbol, None)
             return
@@ -503,13 +581,18 @@ class TradingBot:
         pnl_pct = (pnl / (entry * contracts)) * 100 if entry and contracts else 0.0
         strategy = self._position_strategy.pop(symbol, "bot")
         setup = self._position_setup.pop(symbol, {})
-        outcome = "win" if pnl >= 0 else "loss"
-        lesson = self._build_lesson(symbol, side, strategy, setup, pnl, pnl_pct, reason)
-        self.store.record_trade(symbol, side, entry, price, contracts, pnl, pnl_pct, reason, strategy)
-        self.store.add_experience(symbol, side, strategy, setup, outcome, reason, pnl, pnl_pct, lesson)
+        if setup.get("confidence") is None:
+            setup["confidence"] = self._position_confidence.pop(symbol, None)
+        else:
+            self._position_confidence.pop(symbol, None)
+        self.store.record_trade(
+            symbol, side, entry, price, contracts, pnl, pnl_pct, reason, strategy, setup.get("confidence")
+        )
+        self._record_experience(symbol, side, strategy, setup, pnl, pnl_pct, reason)
         self.orders.close_all(symbol)
         self._positions.pop(symbol, None)
         self.trailing.pop(symbol, None)
+        self._position_confidence.pop(symbol, None)
         self.notifier.info(f"[CLOSE:{reason}] {symbol} {side} pnl={pnl:.2f} ({pnl_pct:.1f}%)")
         self.notifier.send_close(symbol, side, entry, price, contracts, pnl, pnl_pct, reason, strategy)
 
@@ -520,7 +603,19 @@ class TradingBot:
             signal = strategy.generate_signal(symbol, df)
             if not signal:
                 continue
+            if not is_valid_atr(atr):
+                logger.info("%s skipped for %s: ATR invalid (%s)", strategy.name, symbol, atr)
+                continue
             if self.trend.enabled:
+                if not self.trend.is_trending(symbol):
+                    adx = self.trend.last_adx(symbol)
+                    logger.info(
+                        "[SKIP] %s ADX %s < %s, market ranging",
+                        symbol,
+                        f"{adx:.1f}" if adx is not None else "NaN",
+                        self.trend.adx_min,
+                    )
+                    continue
                 trend_dir = self.trend.direction(symbol)
                 if trend_dir and trend_dir != signal["side"]:
                     logger.info("%s skipped for %s: trend %s vs %s", strategy.name, symbol, trend_dir, signal["side"])
@@ -530,6 +625,9 @@ class TradingBot:
                 if not wok:
                     logger.info("%s skipped for %s: %s", strategy.name, symbol, wreason)
                     continue
+            if not self._market_regime_allows(signal["side"]):
+                logger.info("%s skipped for %s: market regime memblokir %s", strategy.name, symbol, signal["side"])
+                continue
             with self._trade_lock:
                 try:
                     positions = self.exchange.fetch_positions()
@@ -562,7 +660,10 @@ class TradingBot:
                 tp2 = tp1 + (tp1 - entry)
                 self.notifier.send_signal(symbol, signal["side"], entry, sl, tp1, tp2, strategy.name)
                 self._position_strategy[symbol] = strategy.name
-                self._position_setup[symbol] = self._capture_setup(symbol, signal["side"], entry, atr, signal.get("metadata"))
+                self._position_setup[symbol] = self._capture_setup(
+                    symbol, signal["side"], entry, atr, signal.get("metadata"), signal.get("confidence")
+                )
+                self._position_confidence[symbol] = signal.get("confidence")
                 self.orders.open_position(symbol, signal, equity, atr)
 
     def _run_grid(self, symbol, positions, equity, atr):
@@ -601,12 +702,13 @@ class TradingBot:
                 except Exception as e:
                     self.notifier.alert(f"Grid order failed {symbol}", str(e))
 
-    def _capture_setup(self, symbol, side, entry, atr, metadata=None):
+    def _capture_setup(self, symbol, side, entry, atr, metadata=None, confidence=None):
         return {
             "symbol": symbol,
             "side": side,
             "entry": entry,
             "atr": atr,
+            "confidence": confidence,
             "metadata": metadata or {},
         }
 
@@ -616,10 +718,18 @@ class TradingBot:
         rsi_txt = f", rsi={rsi:.1f}" if rsi is not None else ""
         entry = setup.get("entry")
         entry_txt = f", entry={entry}" if entry else ""
-        base = f"{symbol} {side.upper()} via {strategy}: {pnl_pct:+.1f}% ({reason}){entry_txt}{rsi_txt}"
+        conf = setup.get("confidence")
+        conf_txt = f", conf={conf:.0f}" if conf is not None else ""
+        base = f"{symbol} {side.upper()} via {strategy}: {pnl_pct:+.1f}% ({reason}){entry_txt}{rsi_txt}{conf_txt}"
         if pnl >= 0:
             return f"Setup BERHASIL: {base}. Pertahankan pola seperti ini."
         return f"Setup GAGAL: {base}. Jangan ulangi pola yang gagal; tunggu konfirmasi lebih kuat."
+
+    def _record_experience(self, symbol, side, strategy, setup, pnl, pnl_pct, reason):
+        outcome = "win" if pnl >= 0 else "loss"
+        lesson = self._build_lesson(symbol, side, strategy, setup, pnl, pnl_pct, reason)
+        exp_id = self.store.add_experience(symbol, side, strategy, setup, outcome, reason, pnl, pnl_pct, lesson)
+        self.reflector.reflect_async(exp_id, symbol, side, strategy, setup, pnl, pnl_pct, reason)
 
     def _open_position(self, symbol, positions):
         for pos in positions:
@@ -646,6 +756,72 @@ class TradingBot:
             return float(self.exchange.fetch_ticker(symbol)["last"])
         except Exception:
             return 0.0
+
+    def _last_close_price(self, symbol):
+        try:
+            trades = self.exchange.fetch_my_trades(symbol, limit=5) or []
+        except Exception:
+            return 0.0
+        for t in trades:
+            try:
+                return float(t.get("price") or 0)
+            except Exception:
+                continue
+        return 0.0
+
+    def _fill_exit_price(self, symbol, pos_side, window_s=3600):
+        try:
+            trades = self.exchange.fetch_my_trades(symbol, limit=50) or []
+        except Exception:
+            return 0.0
+        want = "buy" if pos_side == "long" else "sell"
+        cutoff = time.time() * 1000 - window_s * 1000
+        for t in trades:
+            if (t.get("timestamp") or 0) < cutoff:
+                continue
+            if str(t.get("side") or "").lower() == want:
+                return float(t.get("price") or 0)
+        return 0.0
+
+    def _reconcile_stale_trailing(self):
+        try:
+            positions = self.exchange.fetch_positions()
+        except Exception:
+            return
+        open_symbols = {
+            p.get("symbol")
+            for p in positions
+            if abs(float(p.get("contracts") or 0)) > 0 and p.get("symbol")
+        }
+        for symbol in list(self.trailing.keys()):
+            if symbol in open_symbols:
+                continue
+            info = self.trailing.pop(symbol, None)
+            if not info:
+                continue
+            side = info.get("side")
+            entry = float(info.get("entry") or 0)
+            exit_px = self._last_close_price(symbol) or self._price(symbol)
+            if side and entry > 0 and exit_px > 0:
+                contracts = 0.0
+                try:
+                    trades = self.exchange.fetch_my_trades(symbol, limit=5) or []
+                    for t in trades:
+                        if str(t.get("side") or "").lower() == ("sell" if side == "long" else "buy"):
+                            contracts = abs(float(t.get("amount") or 0))
+                            break
+                except Exception:
+                    contracts = 0.0
+                if contracts > 0:
+                    pnl = (exit_px - entry) * contracts if side == "long" else (entry - exit_px) * contracts
+                    pnl_pct = (pnl / (entry * contracts)) * 100
+                    strategy = "bot"
+                    setup = self._position_setup.pop(symbol, {})
+                    self.store.record_trade(symbol, side, entry, exit_px, contracts, pnl, pnl_pct, "sl_tp", strategy)
+                    self._record_experience(symbol, side, strategy, setup, pnl, pnl_pct, "sl_tp")
+                    self.notifier.info(f"[RECONCILE] {symbol} {side} closed eksternal: pnl={pnl:.2f} ({pnl_pct:.1f}%)")
+            self._position_strategy.pop(symbol, None)
+            self._position_setup.pop(symbol, None)
 
     def _equity(self):
         balance = self.exchange.fetch_balance()

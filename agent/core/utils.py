@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 
 import pandas as pd
@@ -48,6 +49,40 @@ def compute_atr(df, period=14):
         axis=1,
     ).max(axis=1)
     return tr.ewm(alpha=1 / period, adjust=False).mean()
+
+
+def compute_adx(df, period=14):
+    """Average Directional Index (Wilder). Kembalikan Series ADX.
+
+    Guard: kalau data kurang dari period*2, kembalikan Series NaN (bukan error).
+    """
+    n = len(df)
+    if n < period * 2:
+        return pd.Series([float("nan")] * n, index=df.index)
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+    tr = pd.concat(
+        [high - low, (high - close.shift()).abs(), (low - close.shift()).abs()],
+        axis=1,
+    ).max(axis=1)
+    atr = tr.ewm(alpha=1 / period, adjust=False).mean()
+    plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
+    minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    return dx.ewm(alpha=1 / period, adjust=False).mean()
+
+
+def is_valid_atr(atr):
+    try:
+        f = float(atr)
+    except (TypeError, ValueError):
+        return False
+    return not math.isnan(f) and not math.isinf(f) and f > 0
 
 
 def side_to_action(side):

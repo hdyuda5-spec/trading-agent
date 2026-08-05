@@ -1,3 +1,8 @@
+import math
+
+from agent.core.utils import is_valid_atr
+
+
 class RiskManager:
     def __init__(self, config, exchange):
         self.cfg = config
@@ -16,7 +21,7 @@ class RiskManager:
     def compute_position_size(self, symbol, price, equity, direction, atr=None):
         max_pos = self.cfg["max_position_pct"]
         qty_usd = equity * (max_pos / 100.0)
-        if atr and price and self.cfg.get("adaptive_sizing", False):
+        if is_valid_atr(atr) and price and self.cfg.get("adaptive_sizing", False):
             bounds = self.cfg.get("size_volatility_bounds", [0.5, 2.0])
             normal_pct = self.cfg.get("atr_normal_pct", 1.0) / 100.0
             atr_pct = atr / price
@@ -88,7 +93,7 @@ class RiskManager:
         return min_eq > 0 and equity < min_eq
 
     def trailing_stop_hit(self, side, best_price, current, atr=None):
-        if atr and atr > 0 and self.cfg.get("use_atr_trailing", False):
+        if is_valid_atr(atr) and self.cfg.get("use_atr_trailing", False):
             dist = self.cfg.get("atr_trailing_mult", 2.0) * atr
             if side == "long":
                 return current <= best_price - dist
@@ -101,26 +106,24 @@ class RiskManager:
         return current >= best_price * (1 + pct)
 
     def build_take_profit(self, entry_price, side, atr=None):
-        if atr and self.cfg.get("use_atr_stops", False):
-            mult = self.cfg.get("atr_tp_mult", 2.5)
-            if side == "buy":
-                return round(entry_price + mult * atr, 8)
-            return round(entry_price - mult * atr, 8)
-        pct = self.cfg["take_profit_pct"] / 100.0
+        if not is_valid_atr(atr):
+            return None
+        dist = self.cfg.get("atr_tp_mult", 2.5) * atr
+        if dist <= 0:
+            return None
         if side == "buy":
-            return round(entry_price * (1 + pct), 8)
-        return round(entry_price * (1 - pct), 8)
+            return round(entry_price + dist, 8)
+        return round(entry_price - dist, 8)
 
     def build_stop_loss(self, entry_price, side, atr=None):
-        if atr and self.cfg.get("use_atr_stops", False):
-            mult = self.cfg.get("atr_stop_mult", 1.5)
-            if side == "buy":
-                return round(entry_price - mult * atr, 8)
-            return round(entry_price + mult * atr, 8)
-        pct = self.cfg["stop_loss_pct"] / 100.0
+        if not is_valid_atr(atr):
+            return None
+        dist = self.cfg.get("atr_stop_mult", 1.5) * atr
+        if dist <= 0:
+            return None
         if side == "buy":
-            return round(entry_price * (1 - pct), 8)
-        return round(entry_price * (1 + pct), 8)
+            return round(entry_price - dist, 8)
+        return round(entry_price + dist, 8)
 
     def enforce_leverage(self, symbol):
         leverage = min(self.cfg["leverage"], self.cfg["max_leverage"])

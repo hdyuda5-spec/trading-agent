@@ -1,10 +1,12 @@
 import time
 
 
-def should_execute_trade(signal, whale_data, min_whale_txns=3):
+def should_execute_trade(signal, whale_data, min_whale_txns=3, min_net_usdt=0):
     """
     signal: 'BUY' atau 'SELL' dari strategi EMA+RSI
     whale_data: dict berisi net_flow_usdt dan jumlah_transaksi untuk pair ini
+    min_net_usdt: ambang signifikan; hanya memblokir kalau net flow berlawanan
+                  lebih besar dari ambang ini.
     """
     net_flow = whale_data['net_flow_usdt']
     txn_count = whale_data['transaction_count']
@@ -12,6 +14,10 @@ def should_execute_trade(signal, whale_data, min_whale_txns=3):
     # Kalau data whale terlalu sedikit, jangan jadi penentu (biarkan sinyal lolos)
     if txn_count < min_whale_txns:
         return True, "whale data tipis, filter dilewati"
+
+    # Net flow kecil/belum signifikan: jangan blokir, hanya info
+    if abs(net_flow) < min_net_usdt:
+        return True, f"whale net {net_flow} USDT di bawah ambang {min_net_usdt}, tidak memblokir"
 
     if signal == 'BUY':
         if net_flow < 0:
@@ -37,6 +43,28 @@ class WhaleDetector:
         self.notifier = notifier
         self.last_scan = {}
         self._data_cache = {}
+        self._market_cache = None
+
+    def market_net_flow(self, symbols_provider, ttl=300):
+        """Net-flow whale agregat lintas simbol teratas (regime pasar).
+        symbols_provider: callable -> list simbol, dievaluasi hanya saat cache expired.
+        Return (total_net_usdt, jumlah_simbol_dgn_data)."""
+        now = time.time()
+        if self._market_cache and now - self._market_cache[0] < ttl:
+            return self._market_cache[1], self._market_cache[2]
+        total = 0.0
+        with_data = 0
+        try:
+            symbols = symbols_provider()[: self.max_coins]
+        except Exception:
+            symbols = []
+        for symbol in symbols:
+            ev = self.data(symbol)
+            if ev:
+                total += ev["net_usdt"]
+                with_data += 1
+        self._market_cache = (now, total, with_data)
+        return total, with_data
 
     def scan(self, symbols):
         if not self.enabled:

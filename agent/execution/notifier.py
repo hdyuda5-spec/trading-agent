@@ -89,7 +89,15 @@ class Notifier:
 
     def info(self, message):
         logger.info(message)
-        self.alert(message)
+        if self.enabled and self.bot_token and self.chat_id:
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
+                    json={"chat_id": self.chat_id, "text": message},
+                    timeout=10,
+                )
+            except Exception:
+                pass
 
     def send(self, text):
         logger.info(text.replace("\n", " | "))

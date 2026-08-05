@@ -1,0 +1,265 @@
+done BTC/USDT:USDT
+done ETH/USDT:USDT
+done SOL/USDT:USDT
+done SNDK/USDT:USDT
+done KORU/USDT:USDT
+done XAU/USDT:USDT
+done CL/USDT:USDT
+done MU/USDT:USDT
+done ZEC/USDT:USDT
+done SKHY/USDT:USDT
+done HYPE/USDT:USDT
+
+==================== PERBANDINGAN MARKET vs LIMIT ====================
+Metode: 1 lintasan kontinu per seed, partisi trade by entry_bar (train<cut<=test).
+Limit: N seed -> expectancy dilaporkan mean±std dan [min,max]. Market: deterministik.
+
+### BTC/USDT:USDT  |  ADX=ON
+  MARKET:
+    train trades=  78 win= 34.6% avgW= 0.865% avgL= -0.633% exp=  -0.1143% net=    -89.0
+    test  trades=  32 win= 25.0% avgW= 0.487% avgL= -0.564% exp=  -0.3016% net=    -95.2
+    full  trades= 110 win= 31.8% avgW= 0.779% avgL= -0.611% exp=  -0.1688% net=   -184.3
+  LIMIT (seed 1..20):
+    train trades= 38.9 (32..51) exp=-0.0138±0.1213% [min=-0.2209, max=+0.1963] net_mean=-5.6
+    test  trades= 15.9 (10..22) exp=-0.1525±0.1172% [min=-0.4175, max=+0.0707] net_mean=-25.9
+    full  trades= 54.8 (42..66) exp=-0.0558±0.1006% [min=-0.2313, max=+0.0965] net_mean=-31.4
+
+### BTC/USDT:USDT  |  ADX=OFF
+  MARKET:
+    train trades= 102 win= 34.3% avgW= 0.793% avgL= -0.618% exp=  -0.1338% net=   -135.9
+    test  trades=  45 win= 20.0% avgW= 0.486% avgL= -0.545% exp=  -0.3385% net=   -149.2
+    full  trades= 147 win= 29.9% avgW=  0.73% avgL= -0.592% exp=  -0.1965% net=   -285.1
+  LIMIT (seed 1..20):
+    train trades= 51.4 (41..64) exp=-0.0135±0.0776% [min=-0.1335, max=+0.1548] net_mean=-9.0
+    test  trades= 23.0 (17..27) exp=-0.2390±0.0465% [min=-0.3013, max=-0.1489] net_mean=-54.8
+    full  trades= 74.4 (59..89) exp=-0.0843±0.0554% [min=-0.1692, max=+0.0400] net_mean=-63.8
+
+### ETH/USDT:USDT  |  ADX=ON
+  MARKET:
+    train trades=  63 win= 31.7% avgW= 1.308% avgL= -0.789% exp=  -0.1232% net=    -77.7
+    test  trades=  27 win= 18.5% avgW= 0.831% avgL=  -0.68% exp=  -0.3999% net=   -106.7
+    full  trades=  90 win= 27.8% avgW= 1.213% avgL= -0.752% exp=  -0.2063% net=   -184.3
+  LIMIT (seed 1..20):
+    train trades= 31.7 (26..43) exp=-0.0647±0.0884% [min=-0.2569, max=+0.1030] net_mean=-19.4
+    test  trades= 13.1 (8..17) exp=-0.2611±0.1411% [min=-0.5500, max=-0.0112] net_mean=-35.2
+    full  trades= 44.8 (34..58) exp=-0.1216±0.0755% [min=-0.2977, max=-0.0052] net_mean=-54.6
+
+### ETH/USDT:USDT  |  ADX=OFF
+  MARKET:
+    train trades=  91 win= 30.8% avgW= 1.162% avgL= -0.724% exp=  -0.1434% net=   -130.1
+    test  trades=  43 win= 18.6% avgW=  0.73% avgL= -0.666% exp=  -0.4065% net=   -171.2
+    full  trades= 134 win= 26.9% avgW= 1.066% avgL= -0.703% exp=  -0.2278% net=   -301.2
+  LIMIT (seed 1..20):
+    train trades= 44.9 (34..57) exp=-0.0783±0.1162% [min=-0.2416, max=+0.1391] net_mean=-33.7
+    test  trades= 20.6 (14..24) exp=-0.2710±0.1193% [min=-0.5112, max=-0.0512] net_mean=-56.3
+    full  trades= 65.5 (51..77) exp=-0.1403±0.0857% [min=-0.3205, max=-0.0040] net_mean=-90.0
+
+### SOL/USDT:USDT  |  ADX=ON
+  MARKET:
+    train trades=  75 win= 32.0% avgW= 1.242% avgL= -0.741% exp=  -0.1064% net=    -79.9
+    test  trades=  35 win= 28.6% avgW= 0.743% avgL=  -0.61% exp=  -0.2231% net=    -77.2
+    full  trades= 110 win= 30.9% avgW= 1.095% avgL= -0.698% exp=  -0.1435% net=   -157.2
+  LIMIT (seed 1..20):
+    train trades= 32.1 (25..42) exp=-0.0355±0.1611% [min=-0.3470, max=+0.2509] net_mean=-9.4
+    test  trades= 14.9 (10..20) exp=-0.1439±0.1553% [min=-0.4993, max=+0.1021] net_mean=-20.3
+    full  trades= 47.0 (39..57) exp=-0.0653±0.1031% [min=-0.3098, max=+0.1267] net_mean=-29.7
+
+### SOL/USDT:USDT  |  ADX=OFF
+  MARKET:
+    train trades= 114 win= 30.7% avgW= 1.235% avgL=  -0.75% exp=  -0.1408% net=   -159.8
+    test  trades=  52 win= 25.0% avgW= 0.773% avgL= -0.613% exp=  -0.2666% net=   -135.6
+    full  trades= 166 win= 28.9% avgW=  1.11% avgL= -0.705% exp=  -0.1802% net=   -295.5
+  LIMIT (seed 1..20):
+    train trades= 48.6 (42..58) exp=-0.0485±0.0865% [min=-0.1883, max=+0.1191] net_mean=-24.9
+    test  trades= 22.9 (16..28) exp=-0.1404±0.0941% [min=-0.3417, max=+0.0409] net_mean=-33.2
+    full  trades= 71.5 (62..83) exp=-0.0800±0.0675% [min=-0.2081, max=+0.0437] net_mean=-58.1
+
+### SNDK/USDT:USDT  |  ADX=ON
+  MARKET:
+    train trades=  84 win= 26.2% avgW= 2.006% avgL= -1.078% exp=  -0.2701% net=   -225.5
+    test  trades=  33 win= 33.3% avgW= 1.947% avgL= -1.263% exp=  -0.1933% net=    -62.9
+    full  trades= 117 win= 28.2% avgW= 1.986% avgL= -1.126% exp=  -0.2485% net=   -288.4
+  LIMIT (seed 1..20):
+    train trades= 28.7 (23..38) exp=-0.1811±0.2447% [min=-0.6379, max=+0.3058] net_mean=-51.1
+    test  trades=  9.7 (4..15) exp=-0.0890±0.5010% [min=-0.8778, max=+0.7584] net_mean=-6.6
+    full  trades= 38.4 (27..50) exp=-0.1474±0.2162% [min=-0.5085, max=+0.2760] net_mean=-57.7
+
+### SNDK/USDT:USDT  |  ADX=OFF
+  MARKET:
+    train trades= 103 win= 24.3% avgW= 2.045% avgL=  -1.08% exp=  -0.3215% net=   -327.1
+    test  trades=  43 win= 32.6% avgW= 1.917% avgL= -1.237% exp=  -0.2105% net=    -88.0
+    full  trades= 146 win= 26.7% avgW= 1.999% avgL= -1.123% exp=  -0.2888% net=   -415.1
+  LIMIT (seed 1..20):
+    train trades= 35.9 (27..49) exp=-0.1814±0.1767% [min=-0.6511, max=+0.1495] net_mean=-62.9
+    test  trades= 13.2 (6..19) exp=+0.0018±0.3920% [min=-0.6465, max=+0.7349] net_mean=+3.9
+    full  trades= 49.0 (36..62) exp=-0.1229±0.1233% [min=-0.3867, max=+0.1646] net_mean=-59.0
+
+### KORU/USDT:USDT  |  ADX=ON
+  MARKET:
+    train trades=  36 win= 30.6% avgW= 4.265% avgL= -1.929% exp=  -0.0368% net=    -15.5
+    test  trades=  17 win= 35.3% avgW= 3.134% avgL= -1.943% exp=  -0.1513% net=    -26.4
+    full  trades=  53 win= 32.1% avgW= 3.865% avgL= -1.934% exp=  -0.0735% net=    -41.9
+  LIMIT (seed 1..20):
+    train trades= 14.4 (9..22) exp=+0.1131±0.8484% [min=-1.6215, max=+1.7305] net_mean=+22.2
+    test  trades=  6.7 (4..13) exp=+0.0761±0.8529% [min=-1.9262, max=+1.5348] net_mean=+6.1
+    full  trades= 21.1 (14..27) exp=+0.1219±0.6931% [min=-1.1655, max=+1.3283] net_mean=+28.3
+
+### KORU/USDT:USDT  |  ADX=OFF
+  MARKET:
+    train trades=  52 win= 30.8% avgW= 3.391% avgL= -1.703% exp=  -0.1355% net=    -72.8
+    test  trades=  19 win= 31.6% avgW= 3.134% avgL= -1.775% exp=  -0.2246% net=    -43.0
+    full  trades=  71 win= 31.0% avgW= 3.321% avgL= -1.722% exp=  -0.1593% net=   -115.8
+  LIMIT (seed 1..20):
+    train trades= 21.7 (15..28) exp=-0.2662±0.4315% [min=-1.1658, max=+0.4083] net_mean=-51.8
+    test  trades=  7.8 (2..11) exp=+0.0882±0.7438% [min=-1.8257, max=+1.4326] net_mean=+4.8
+    full  trades= 29.4 (22..38) exp=-0.1635±0.3790% [min=-0.8172, max=+0.4044] net_mean=-47.0
+
+### XAU/USDT:USDT  |  ADX=ON
+  MARKET:
+    train trades=  57 win= 26.3% avgW=  0.42% avgL= -0.479% exp=  -0.2426% net=   -137.4
+    test  trades=  23 win= 17.4% avgW= 0.435% avgL= -0.434% exp=  -0.2830% net=    -64.0
+    full  trades=  80 win= 23.8% avgW= 0.423% avgL= -0.465% exp=  -0.2542% net=   -201.4
+  LIMIT (seed 1..20):
+    train trades= 25.4 (20..33) exp=-0.1167±0.0551% [min=-0.2392, max=+0.0280] net_mean=-29.8
+    test  trades= 10.9 (6..14) exp=-0.1565±0.0816% [min=-0.2881, max=-0.0227] net_mean=-16.9
+    full  trades= 36.4 (30..47) exp=-0.1274±0.0547% [min=-0.2476, max=-0.0054] net_mean=-46.7
+
+### XAU/USDT:USDT  |  ADX=OFF
+  MARKET:
+    train trades=  90 win= 24.4% avgW= 0.388% avgL= -0.429% exp=  -0.2290% net=   -204.1
+    test  trades=  33 win= 18.2% avgW= 0.398% avgL= -0.395% exp=  -0.2507% net=    -80.7
+    full  trades= 123 win= 22.8% avgW=  0.39% avgL= -0.419% exp=  -0.2348% net=   -284.8
+  LIMIT (seed 1..20):
+    train trades= 40.2 (30..49) exp=-0.1118±0.0569% [min=-0.2181, max=-0.0276] net_mean=-44.8
+    test  trades= 15.8 (10..19) exp=-0.1552±0.0600% [min=-0.2483, max=-0.0441] net_mean=-24.5
+    full  trades= 56.0 (47..66) exp=-0.1242±0.0376% [min=-0.1861, max=-0.0649] net_mean=-69.4
+
+### CL/USDT:USDT  |  ADX=ON
+  MARKET:
+    train trades=  59 win= 37.3% avgW= 1.081% avgL= -0.701% exp=  -0.0365% net=    -21.8
+    test  trades=  33 win= 30.3% avgW=  1.17% avgL= -0.705% exp=  -0.1365% net=    -45.0
+    full  trades=  92 win= 34.8% avgW= 1.109% avgL= -0.702% exp=  -0.0723% net=    -66.8
+  LIMIT (seed 1..20):
+    train trades= 24.4 (19..31) exp=+0.0813±0.1547% [min=-0.1805, max=+0.4219] net_mean=+19.2
+    test  trades= 13.7 (9..18) exp=-0.0833±0.1634% [min=-0.3707, max=+0.2105] net_mean=-11.4
+    full  trades= 38.1 (30..48) exp=+0.0202±0.1168% [min=-0.1726, max=+0.3426] net_mean=+7.7
+
+### CL/USDT:USDT  |  ADX=OFF
+  MARKET:
+    train trades=  97 win= 35.1% avgW= 1.016% avgL= -0.658% exp=  -0.0714% net=    -69.4
+    test  trades=  42 win= 28.6% avgW= 1.125% avgL=  -0.71% exp=  -0.1858% net=    -77.4
+    full  trades= 139 win= 33.1% avgW= 1.044% avgL= -0.675% exp=  -0.1060% net=   -146.9
+  LIMIT (seed 1..20):
+    train trades= 41.3 (32..49) exp=-0.0047±0.1061% [min=-0.1879, max=+0.2469] net_mean=-2.1
+    test  trades= 19.2 (14..23) exp=-0.1353±0.1484% [min=-0.3784, max=+0.1317] net_mean=-25.5
+    full  trades= 60.5 (53..72) exp=-0.0446±0.0970% [min=-0.1886, max=+0.2078] net_mean=-27.6
+
+### MU/USDT:USDT  |  ADX=ON
+  MARKET:
+    train trades=  70 win= 31.4% avgW= 1.683% avgL= -1.192% exp=  -0.2888% net=   -200.9
+    test  trades=  35 win= 37.1% avgW= 1.423% avgL= -0.954% exp=  -0.0709% net=    -24.7
+    full  trades= 105 win= 33.3% avgW= 1.586% avgL= -1.117% exp=  -0.2162% net=   -225.6
+  LIMIT (seed 1..20):
+    train trades= 29.4 (24..38) exp=-0.1241±0.2554% [min=-0.7593, max=+0.3908] net_mean=-35.8
+    test  trades= 15.6 (11..20) exp=+0.1009±0.3167% [min=-0.5916, max=+0.6855] net_mean=+12.6
+    full  trades= 45.0 (36..56) exp=-0.0470±0.2228% [min=-0.4812, max=+0.3434] net_mean=-23.2
+
+### MU/USDT:USDT  |  ADX=OFF
+  MARKET:
+    train trades= 113 win= 26.5% avgW= 1.512% avgL= -1.039% exp=  -0.3622% net=   -402.0
+    test  trades=  43 win= 32.6% avgW= 1.425% avgL= -0.981% exp=  -0.1975% net=    -81.6
+    full  trades= 156 win= 28.2% avgW= 1.484% avgL= -1.024% exp=  -0.3168% net=   -483.6
+  LIMIT (seed 1..20):
+    train trades= 47.6 (39..60) exp=-0.2593±0.1806% [min=-0.5572, max=+0.0435] net_mean=-118.4
+    test  trades= 19.7 (15..25) exp=-0.1377±0.2209% [min=-0.6912, max=+0.3341] net_mean=-27.3
+    full  trades= 67.3 (58..79) exp=-0.2219±0.1457% [min=-0.4742, max=+0.1174] net_mean=-145.7
+
+### ZEC/USDT:USDT  |  ADX=ON
+  MARKET:
+    train trades=  76 win= 26.3% avgW= 2.343% avgL= -1.131% exp=  -0.2170% net=   -164.8
+    test  trades=  28 win= 21.4% avgW= 1.482% avgL= -1.019% exp=  -0.4827% net=   -132.2
+    full  trades= 104 win= 25.0% avgW= 2.144% avgL= -1.099% exp=  -0.2886% net=   -297.0
+  LIMIT (seed 1..20):
+    train trades= 30.5 (24..42) exp=-0.0094±0.2788% [min=-0.7320, max=+0.5591] net_mean=-5.4
+    test  trades= 12.1 (7..17) exp=-0.4220±0.2419% [min=-0.8557, max=+0.0534] net_mean=-51.7
+    full  trades= 42.5 (35..51) exp=-0.1328±0.2010% [min=-0.7753, max=+0.1282] net_mean=-57.1
+
+### ZEC/USDT:USDT  |  ADX=OFF
+  MARKET:
+    train trades= 112 win= 30.4% avgW= 2.347% avgL= -1.103% exp=  -0.0557% net=    -63.9
+    test  trades=  46 win= 23.9% avgW= 1.398% avgL= -1.051% exp=  -0.4657% net=   -210.9
+    full  trades= 158 win= 28.5% avgW= 2.115% avgL= -1.087% exp=  -0.1750% net=   -274.8
+  LIMIT (seed 1..20):
+    train trades= 46.0 (36..56) exp=+0.1309±0.2557% [min=-0.2729, max=+0.6815] net_mean=+58.0
+    test  trades= 20.1 (16..25) exp=-0.3138±0.1909% [min=-0.7804, max=+0.0348] net_mean=-62.9
+    full  trades= 66.1 (58..79) exp=-0.0038±0.2031% [min=-0.3018, max=+0.4601] net_mean=-5.0
+
+### SKHY/USDT:USDT  |  ADX=ON
+  MARKET:
+    train trades=  15 win= 46.7% avgW= 1.776% avgL= -1.791% exp=  -0.1260% net=    -19.1
+    test  trades=   7 win= 28.6% avgW= 1.125% avgL= -1.398% exp=  -0.6771% net=    -47.2
+    full  trades=  22 win= 40.9% avgW= 1.632% avgL=  -1.64% exp=  -0.3013% net=    -66.3
+  LIMIT (seed 1..20):
+    train trades=  6.0 (3..9) exp=-0.0319±0.6083% [min=-1.5720, max=+1.1714] net_mean=-3.0
+    test  trades=  2.7 (1..5) exp=-0.7254±0.8721% [min=-1.6180, max=+2.2748] net_mean=-22.8
+    full  trades=  8.7 (5..11) exp=-0.2943±0.4466% [min=-1.4657, max=+0.3870] net_mean=-25.8
+
+### SKHY/USDT:USDT  |  ADX=OFF
+  MARKET:
+    train trades=  16 win= 50.0% avgW= 1.706% avgL= -1.791% exp=  -0.0421% net=     -7.0
+    test  trades=   7 win= 28.6% avgW= 1.125% avgL= -1.398% exp=  -0.6771% net=    -47.3
+    full  trades=  23 win= 43.5% avgW=  1.59% avgL=  -1.64% exp=  -0.2353% net=    -54.3
+  LIMIT (seed 1..20):
+    train trades=  6.3 (4..9) exp=+0.4039±0.6410% [min=-0.8905, max=+1.3455] net_mean=+22.6
+    test  trades=  2.5 (1..4) exp=-0.7623±0.6684% [min=-1.6352, max=+0.6519] net_mean=-19.1
+    full  trades=  8.9 (5..12) exp=+0.0629±0.4634% [min=-0.9427, max=+0.6540] net_mean=+3.4
+
+### HYPE/USDT:USDT  |  ADX=ON
+  MARKET:
+    train trades=  77 win= 29.9% avgW= 1.892% avgL= -1.105% exp=  -0.2097% net=   -161.1
+    test  trades=  25 win= 16.0% avgW= 1.223% avgL= -0.823% exp=  -0.4953% net=   -121.1
+    full  trades= 102 win= 26.5% avgW= 1.793% avgL= -1.026% exp=  -0.2797% net=   -282.3
+  LIMIT (seed 1..20):
+    train trades= 30.6 (24..42) exp=-0.1694±0.1932% [min=-0.5711, max=+0.1707] net_mean=-51.0
+    test  trades= 10.7 (6..16) exp=-0.4698±0.2148% [min=-0.7791, max=+0.1024] net_mean=-48.9
+    full  trades= 41.4 (32..51) exp=-0.2422±0.1418% [min=-0.5201, max=-0.0054] net_mean=-99.8
+
+### HYPE/USDT:USDT  |  ADX=OFF
+  MARKET:
+    train trades= 113 win= 30.1% avgW= 1.945% avgL= -1.154% exp=  -0.2218% net=   -249.0
+    test  trades=  35 win= 20.0% avgW= 1.258% avgL= -0.793% exp=  -0.3828% net=   -129.9
+    full  trades= 148 win= 27.7% avgW= 1.827% avgL=  -1.06% exp=  -0.2599% net=   -378.9
+  LIMIT (seed 1..20):
+    train trades= 45.7 (36..56) exp=-0.1309±0.1482% [min=-0.3557, max=+0.1433] net_mean=-59.8
+    test  trades= 15.2 (12..19) exp=-0.2973±0.2217% [min=-0.7951, max=+0.0448] net_mean=-42.9
+    full  trades= 60.9 (54..75) exp=-0.1697±0.1139% [min=-0.4351, max=+0.0032] net_mean=-102.7
+
+
+--- RINGKASAN test expectancy (%/trade) ---
+ADX   symbol                   mkt test    lim test mean±std       lim [min..max]   winner
+ON    BTC/USDT:USDT             -0.3016 -0.1525±0.1172  [-0.4175..+0.0707]    LIMIT
+ON    ETH/USDT:USDT             -0.3999 -0.2611±0.1411  [-0.5500..-0.0112]    LIMIT
+ON    SOL/USDT:USDT             -0.2231 -0.1439±0.1553  [-0.4993..+0.1021]    LIMIT
+ON    SNDK/USDT:USDT            -0.1933 -0.0890±0.5010  [-0.8778..+0.7584]    LIMIT
+ON    KORU/USDT:USDT            -0.1513 +0.0761±0.8529  [-1.9262..+1.5348]    LIMIT
+ON    XAU/USDT:USDT             -0.2830 -0.1565±0.0816  [-0.2881..-0.0227]    LIMIT
+ON    CL/USDT:USDT              -0.1365 -0.0833±0.1634  [-0.3707..+0.2105]    LIMIT
+ON    MU/USDT:USDT              -0.0709 +0.1009±0.3167  [-0.5916..+0.6855]    LIMIT
+ON    ZEC/USDT:USDT             -0.4827 -0.4220±0.2419  [-0.8557..+0.0534]    LIMIT
+ON    SKHY/USDT:USDT            -0.6771 -0.7254±0.8721  [-1.6180..+2.2748]      MKT
+ON    HYPE/USDT:USDT            -0.4953 -0.4698±0.2148  [-0.7791..+0.1024]    LIMIT
+OFF   BTC/USDT:USDT             -0.3385 -0.2390±0.0465  [-0.3013..-0.1489]    LIMIT
+OFF   ETH/USDT:USDT             -0.4065 -0.2710±0.1193  [-0.5112..-0.0512]    LIMIT
+OFF   SOL/USDT:USDT             -0.2666 -0.1404±0.0941  [-0.3417..+0.0409]    LIMIT
+OFF   SNDK/USDT:USDT            -0.2105 +0.0018±0.3920  [-0.6465..+0.7349]    LIMIT
+OFF   KORU/USDT:USDT            -0.2246 +0.0882±0.7438  [-1.8257..+1.4326]    LIMIT
+OFF   XAU/USDT:USDT             -0.2507 -0.1552±0.0600  [-0.2483..-0.0441]    LIMIT
+OFF   CL/USDT:USDT              -0.1858 -0.1353±0.1484  [-0.3784..+0.1317]    LIMIT
+OFF   MU/USDT:USDT              -0.1975 -0.1377±0.2209  [-0.6912..+0.3341]    LIMIT
+OFF   ZEC/USDT:USDT             -0.4657 -0.3138±0.1909  [-0.7804..+0.0348]    LIMIT
+OFF   SKHY/USDT:USDT            -0.6771 -0.7623±0.6684  [-1.6352..+0.6519]      MKT
+OFF   HYPE/USDT:USDT            -0.3828 -0.2973±0.2217  [-0.7951..+0.0448]    LIMIT
+
+--- AGREGASI antar simbol (test expectancy) ---
+ADX=ON: mkt test mean = -0.3104% | limit test mean = -0.2115% (kisaran seed: -1.9262% .. +2.2748%)
+ADX=OFF: mkt test mean = -0.3278% | limit test mean = -0.2147% (kisaran seed: -1.8257% .. +1.4326%)
