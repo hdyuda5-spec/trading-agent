@@ -166,6 +166,44 @@
     "orderbook_depth": 10
   },
 
+  "features": {
+    "enabled": [
+      "trend",
+      "volatility",
+      "volume",
+      "liquidity",
+      "structure",
+      "whale",
+      "sentiment",
+      "funding"
+    ],
+    "market_cache_ttl": 300,
+    "trend": {
+      "mode": "ema_cross",
+      "ema_fast": 21,
+      "ema_slow": 50,
+      "adx_enabled": false,
+      "adx_period": 14,
+      "min_adx": 20
+    },
+    "volatility": {
+      "atr_period": 14,
+      "bb_period": 20,
+      "bb_std": 2
+    },
+    "structure": {
+      "sr_window": 3,
+      "sr_cluster_pct": 0.5,
+      "zone_pct": 0.6
+    },
+    "liquidity": {
+      "orderbook_depth": 10
+    },
+    "funding": {
+      "extreme_rate": 0.0001
+    }
+  },
+
   "whale": {
     "enabled": true,
     "interval_minutes": 30,

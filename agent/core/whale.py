@@ -1,6 +1,53 @@
 import time
 
 
+def aggregate_whale_flow(trades, window_seconds, min_notional, now_ms=None):
+    """Aggregate whale transactions from a list of public trades.
+
+    Pure function shared by ``WhaleDetector._scan_symbol`` and the Whale
+    feature so both interpret the same data identically.
+
+    Returns ``None`` when no trade meets ``min_notional`` within the window,
+    otherwise a dict with ``n``, ``buy_usdt``, ``sell_usdt``, ``net_usdt``,
+    ``direction`` and ``top`` (largest whale fills).
+    """
+    now_ms = now_ms if now_ms is not None else time.time() * 1000
+    cutoff = now_ms - window_seconds * 1000
+    whales = []
+    buy = 0.0
+    sell = 0.0
+    for t in trades:
+        ts = float(t.get("timestamp") or 0)
+        if ts and ts < cutoff:
+            continue
+        amount = float(t.get("amount") or 0)
+        price = float(t.get("price") or 0)
+        side = t.get("side")
+        if side is None:
+            is_maker = (t.get("info") or {}).get("m")
+            side = "sell" if is_maker in (True, "true", 1, "1") else "buy"
+        notional = amount * price
+        if notional >= min_notional:
+            whales.append((side, notional, price, ts))
+        if side == "buy":
+            buy += notional
+        else:
+            sell += notional
+    if not whales:
+        return None
+    return {
+        "n": len(whales),
+        "buy_usdt": round(buy, 2),
+        "sell_usdt": round(sell, 2),
+        "net_usdt": round(buy - sell, 2),
+        "direction": "LONG" if buy >= sell else "SHORT",
+        "top": [
+            {"side": s, "usdt": round(n, 2), "price": p}
+            for s, n, p, _ in sorted(whales, key=lambda w: -w[1])[:3]
+        ],
+    }
+
+
 def should_execute_trade(signal, whale_data, min_whale_txns=3, min_net_usdt=0):
     """
     signal: 'BUY' atau 'SELL' dari strategi EMA+RSI
@@ -97,41 +144,10 @@ class WhaleDetector:
 
     def _scan_symbol(self, symbol):
         trades = self.exchange.fetch_trades(symbol, limit=1000)
-        cutoff = (time.time() - self.window_seconds) * 1000
-        whales = []
-        buy = 0.0
-        sell = 0.0
-        for t in trades:
-            ts = float(t.get("timestamp") or 0)
-            if ts and ts < cutoff:
-                continue
-            amount = float(t.get("amount") or 0)
-            price = float(t.get("price") or 0)
-            side = t.get("side")
-            if side is None:
-                is_maker = (t.get("info") or {}).get("m")
-                side = "sell" if is_maker in (True, "true", 1, "1") else "buy"
-            notional = amount * price
-            if notional >= self.min_notional:
-                whales.append((side, notional, price, ts))
-            if side == "buy":
-                buy += notional
-            else:
-                sell += notional
-        if not whales:
-            return None
-        return {
-            "symbol": symbol,
-            "n": len(whales),
-            "buy_usdt": round(buy, 2),
-            "sell_usdt": round(sell, 2),
-            "net_usdt": round(buy - sell, 2),
-            "direction": "LONG" if buy >= sell else "SHORT",
-            "top": [
-                {"side": s, "usdt": round(n, 2), "price": p}
-                for s, n, p, _ in sorted(whales, key=lambda w: -w[1])[:3]
-            ],
-        }
+        ev = aggregate_whale_flow(trades, self.window_seconds, self.min_notional)
+        if ev:
+            ev["symbol"] = symbol
+        return ev
 
     def format(self, events):
         if not events:

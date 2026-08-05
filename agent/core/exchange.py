@@ -110,6 +110,18 @@ class ExchangeClient:
     def fetch_my_trades(self, symbol, limit=10, since=None):
         return self.client.fetch_my_trades(symbol, limit=limit, since=since)
 
+    def fetch_funding_rate(self, symbol):
+        """Current funding rate (fraction, e.g. 0.0001) or None if unavailable."""
+        try:
+            result = self.client.fetch_funding_rate(symbol)
+        except Exception:
+            return None
+        try:
+            rate = result.get("fundingRate")
+            return float(rate) if rate is not None else None
+        except (TypeError, ValueError):
+            return None
+
     def check_health(self):
         try:
             self.client.fetch_time()

@@ -7,8 +7,8 @@ from agent.strategies.base import BaseStrategy
 class MeanReversionStrategy(BaseStrategy):
     name = "mean_reversion"
 
-    def __init__(self, config, strat_cfg, exchange, notifier):
-        super().__init__(config, strat_cfg, exchange, notifier)
+    def __init__(self, config, strat_cfg, exchange, notifier, feature_engine=None):
+        super().__init__(config, strat_cfg, exchange, notifier, feature_engine=feature_engine)
         self.bb_period = int(self.strat_cfg.get("bb_period", 20))
         self.bb_std = float(self.strat_cfg.get("bb_std", 2))
         self.rsi_period = int(self.strat_cfg.get("rsi_period", 14))
@@ -23,19 +23,31 @@ class MeanReversionStrategy(BaseStrategy):
         sd = series.rolling(period).std()
         return sma, sma + std * sd, sma - std * sd
 
-    def generate_signal(self, symbol, df):
-        close = df["close"]
+    def _bands_from_features(self, features, close):
+        """Bollinger bands + RSI from feature metadata when the volatility
+        feature uses the same period/std; otherwise recompute from df."""
+        vola = features.volatility.metadata
+        if vola.get("bb_period") == self.bb_period and vola.get("bb_std") == self.bb_std:
+            sma = vola.get("bb_sma")
+            upper = vola.get("bb_upper")
+            lower = vola.get("bb_lower")
+            if sma is not None and upper is not None and lower is not None:
+                rsi = features.trend.metadata.get("rsi")
+                if rsi is not None:
+                    return sma, upper, lower, rsi
         sma, upper, lower = self.bollinger(close, self.bb_period, self.bb_std)
-        rsi = compute_rsi(close, self.rsi_period)
+        rsi = float(compute_rsi(close, self.rsi_period).iloc[-1])
+        return float(sma.iloc[-1]), float(upper.iloc[-1]), float(lower.iloc[-1]), rsi
+
+    def generate_signal(self, symbol, df, features=None):
+        features = self.resolve_features(symbol, df, features)
 
         if len(df) < max(self.bb_period, self.rsi_period) + 1:
             return None
 
+        close = df["close"]
+        cur_sma, cur_upper, cur_lower, cur_rsi = self._bands_from_features(features, close)
         cur_close = float(close.iloc[-1])
-        cur_rsi = float(rsi.iloc[-1])
-        cur_sma = float(sma.iloc[-1])
-        cur_upper = float(upper.iloc[-1])
-        cur_lower = float(lower.iloc[-1])
 
         signal = None
         confidence = 60.0

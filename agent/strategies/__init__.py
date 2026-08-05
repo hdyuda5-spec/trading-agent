@@ -11,9 +11,11 @@ STRATEGY_MAP = {
 }
 
 
-def build_strategies(config, exchange, notifier):
+def build_strategies(config, exchange, notifier, feature_engine=None):
     strategies = []
     for name, cfg in config["strategies"].items():
         if cfg.get("enabled") and name in STRATEGY_MAP:
-            strategies.append(STRATEGY_MAP[name](config, cfg, exchange, notifier))
+            strategies.append(
+                STRATEGY_MAP[name](config, cfg, exchange, notifier, feature_engine=feature_engine)
+            )
     return strategies

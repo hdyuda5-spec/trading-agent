@@ -14,6 +14,7 @@ from agent.data.trades import TradeStore
 from agent.execution.notifier import Notifier, fmt_wib
 from agent.execution.order import OrderManager
 from agent.execution.telegram_ctl import TelegramController
+from agent.features import build_feature_engine
 from agent.strategies import build_strategies
 
 logger = logging.getLogger("trading-agent")
@@ -30,7 +31,8 @@ class TradingBot:
         )
         self.risk = RiskManager(config["risk"], self.exchange)
         self.orders = OrderManager(self.exchange, self.risk, config, self.notifier)
-        self.strategies = build_strategies(config, self.exchange, self.notifier)
+        self.feature_engine = build_feature_engine(self.exchange, config)
+        self.strategies = build_strategies(config, self.exchange, self.notifier, feature_engine=self.feature_engine)
         self.trend = TrendFilter(self.exchange, config)
         self.store = TradeStore()
         self.reflector = Reflector(
@@ -223,7 +225,7 @@ class TradingBot:
 
     def _run_auto_screen(self):
         try:
-            screener = Screener(self.exchange, self.config)
+            screener = Screener(self.exchange, self.config, feature_engine=self.feature_engine)
             results = screener.candidates()
             title = f"📡 Auto-Screen {screener.timeframe} • {fmt_wib()}"
             self.notifier.send(screener.format(results, title=title))
@@ -597,10 +599,11 @@ class TradingBot:
         self.notifier.send_close(symbol, side, entry, price, contracts, pnl, pnl_pct, reason, strategy)
 
     def _run_momentum_and_ai(self, symbol, df, positions, equity, atr):
+        features = self.feature_engine.compute(symbol, df, include_market=False)
         for strategy in self.strategies:
             if strategy.name not in ("momentum", "ai_signal"):
                 continue
-            signal = strategy.generate_signal(symbol, df)
+            signal = strategy.generate_signal(symbol, df, features=features)
             if not signal:
                 continue
             if not is_valid_atr(atr):

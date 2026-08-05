@@ -1,7 +1,8 @@
 import math
 import time
 
-from agent.core.utils import CANDLE_TF_SECONDS, compute_adx, compute_ema, ohlcv_to_dataframe
+from agent.core.utils import CANDLE_TF_SECONDS, compute_adx, ohlcv_to_dataframe
+from agent.features.trend import TrendFeature
 
 
 class TrendFilter:
@@ -18,6 +19,23 @@ class TrendFilter:
         self.adx_min = float(adx_cfg.get("min_adx", 20))
         self.exchange = exchange
         self._cache = {}
+        # Trend direction is delegated to the shared TrendFeature so both the
+        # filter and the Feature Engine interpret the EMAs identically.
+        self._trend_feature = TrendFeature(
+            exchange,
+            {
+                "features": {
+                    "trend": {
+                        "mode": "ema_cross",
+                        "ema_fast": self.fast,
+                        "ema_slow": self.slow,
+                        "adx_enabled": self.adx_enabled,
+                        "adx_period": self.adx_period,
+                        "min_adx": self.adx_min,
+                    }
+                }
+            },
+        )
 
     def active_for(self, symbol):
         return self.enabled and (not self.symbols or symbol in self.symbols)
@@ -42,9 +60,8 @@ class TrendFilter:
         df = self._ohlcv(symbol)
         if df is None or len(df) < self.slow + 2:
             return None
-        fast = compute_ema(df["close"], self.fast).iloc[-1]
-        slow = compute_ema(df["close"], self.slow).iloc[-1]
-        return "LONG" if fast > slow else ("SHORT" if fast < slow else None)
+        result = self._trend_feature.compute(symbol, df)
+        return {"bullish": "LONG", "bearish": "SHORT"}.get(result.signal)
 
     def last_adx(self, symbol):
         df = self._ohlcv(symbol)

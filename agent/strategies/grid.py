@@ -4,12 +4,12 @@ from agent.strategies.base import BaseStrategy
 class GridStrategy(BaseStrategy):
     name = "grid"
 
-    def __init__(self, config, strat_cfg, exchange, notifier):
-        super().__init__(config, strat_cfg, exchange, notifier)
+    def __init__(self, config, strat_cfg, exchange, notifier, feature_engine=None):
+        super().__init__(config, strat_cfg, exchange, notifier, feature_engine=feature_engine)
         self.grids = {}
         self.center = {}
 
-    def generate_signal(self, symbol, df):
+    def generate_signal(self, symbol, df, features=None):
         return None
 
     def build_grid(self, symbol, price):

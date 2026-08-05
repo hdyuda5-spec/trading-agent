@@ -73,7 +73,7 @@ class AISignalStrategy(BaseStrategy):
         self._executor = ThreadPoolExecutor(max_workers=4)
         self.store = TradeStore()
 
-    def generate_signal(self, symbol, df):
+    def generate_signal(self, symbol, df, features=None):
         if not self.api_key:
             return None
         last_ts = df.index[-1]
@@ -90,7 +90,8 @@ class AISignalStrategy(BaseStrategy):
         if now - self._last_call.get(symbol, 0) < self.min_interval:
             return cached["signal"] if cached else None
         self._last_call[symbol] = now
-        indicators = self._summarize(df)
+        features = self.resolve_features(symbol, df, features)
+        indicators = self._summarize(df, features)
         rsi = float(indicators.get("rsi14") or 0.0)
         news = self._fetch_news(symbol)
         lessons = "\n".join(self.store.recent_lessons(6)) or "Belum ada riwayat trade."
@@ -214,13 +215,45 @@ class AISignalStrategy(BaseStrategy):
         lo, hi = self.rsi_long_range if side == "LONG" else self.rsi_short_range
         return lo <= rsi <= hi
 
-    def _summarize(self, df):
+    def _summarize(self, df, features=None):
         close = df["close"]
+        high = float(df["high"].iloc[-24:].max())
+        low = float(df["low"].iloc[-24:].min())
+        if features is not None:
+            trend = features.trend.metadata
+            vola = features.volatility.metadata
+            volume = features.volume.metadata
+            summary = {
+                "last_price": trend.get("price") or float(close.iloc[-1]),
+                "rsi14": round(trend.get("rsi") or 0.0, 2),
+                "ema9": round(trend.get("ema9") or 0.0, 8),
+                "ema21": round(trend.get("ema21") or 0.0, 8),
+                "trend": "up" if (trend.get("ema9") or 0) > (trend.get("ema21") or 0) else "down",
+                "range_24h": [round(low, 8), round(high, 8)],
+                "volume": volume.get("volume", float(df["volume"].iloc[-1])),
+                "atr_pct": round(vola.get("atr_pct") or 0.0, 4),
+            }
+            for name, signal_key, fields in (
+                ("whale", "whale", (("net_usdt", "net_usdt"), ("n", "n"))),
+                ("sentiment", "sentiment", (("score", None),)),
+                ("funding", "funding", (("funding_rate", "funding_rate"),)),
+                ("liquidity", "liquidity", (("spread_pct", "spread_pct"),)),
+            ):
+                feature = features.get(name)
+                if feature is None or not feature.metadata:
+                    continue
+                item = {"signal": feature.signal}
+                for key, alias in fields:
+                    if alias is None:
+                        if key == "score":
+                            item[key] = (feature.metadata.get("score") or {}).get("score")
+                    elif key in feature.metadata:
+                        item[alias] = feature.metadata[key]
+                summary[name] = item
+            return summary
         rsi = compute_rsi(close, 14).iloc[-1]
         ema_fast = compute_ema(close, 9).iloc[-1]
         ema_slow = compute_ema(close, 21).iloc[-1]
-        high = float(df["high"].iloc[-24:].max())
-        low = float(df["low"].iloc[-24:].min())
         return {
             "last_price": float(close.iloc[-1]),
             "rsi14": round(float(rsi), 2),
