@@ -150,14 +150,22 @@ class WhaleDetector:
         return ev
 
     def format(self, events):
+        from agent.execution.notifier import fmt_usdt
+
         if not events:
             return "🐋 Tidak ada aktivitas whale dalam window"
-        lines = [f"🐋 Whale Detector • {len(events)} simbol aktif"]
-        for e in events:
-            icon = "🟢" if e["direction"] == "LONG" else "🔴"
-            sym = e["symbol"].replace("/USDT:USDT", "/USDT")
-            lines.append(
-                f"{icon} {sym} {e['n']}x whale {e['net_usdt']:+,.0f} USDT "
-                f"(buy {e['buy_usdt']:,.0f} / sell {e['sell_usdt']:,.0f})"
-            )
+        longs = [e for e in events if e["direction"] == "LONG"]
+        shorts = [e for e in events if e["direction"] != "LONG"]
+        lines = [f"🐋 WHALE DETECTOR • {len(events)} simbol aktif"]
+        for grp, icon, label in ((longs, "🟢", "BELI BERSIH"), (shorts, "🔴", "JUAL BERSIH")):
+            if not grp:
+                continue
+            lines.append(f"{icon} {label} ({len(grp)})")
+            for e in grp:
+                sym = e["symbol"].replace("/USDT:USDT", "/USDT")
+                net = f"{'+' if e['net_usdt'] >= 0 else ''}{fmt_usdt(e['net_usdt'])} USDT"
+                lines.append(
+                    f"  {sym} {net} · {e['n']}x · "
+                    f"beli {fmt_usdt(e['buy_usdt'])} / jual {fmt_usdt(e['sell_usdt'])}"
+                )
         return "\n".join(lines)

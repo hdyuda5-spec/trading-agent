@@ -155,7 +155,7 @@
     "enabled": true,
     "auto_interval_minutes": 30,
     "top_signal_cards": 3,
-    "auto_trade": false,
+    "auto_trade": true,
     "top_trade_candidates": 3,
     "rsi_confirmation": true,
     "rsi_long_range": [40, 75],

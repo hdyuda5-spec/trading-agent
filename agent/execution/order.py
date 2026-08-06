@@ -61,6 +61,22 @@ class OrderManager:
                     f"amt={amount:.4f} @ {fill_price} conf={conf_disp:.1f}"
                 )
                 self.place_sl_tp(symbol, order, fill_price, side, amount, atr)
+                sl_tp = self._sl_tp.get(symbol, {})
+                leverage = min(
+                    self.risk.cfg.get("leverage", 1),
+                    self.risk.cfg.get("max_leverage", 1),
+                )
+                self.notifier.send_open(
+                    symbol,
+                    signal["side"],
+                    fill_price,
+                    amount,
+                    sl=sl_tp.get("sl"),
+                    tp=sl_tp.get("tp"),
+                    strategy=signal.get("strategy"),
+                    leverage=leverage,
+                    equity=equity,
+                )
                 return order
             except Exception as e:
                 logger.warning("open retry %s/%s failed: %s", attempt + 1, self.cfg["retry_attempts"], e)

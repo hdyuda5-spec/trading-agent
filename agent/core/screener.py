@@ -86,14 +86,29 @@ class Screener:
             return None
 
     def format(self, results, title="Screening"):
+        if not results:
+            return f"{title}: tidak ada kandidat"
+        groups = {"LONG": [], "SHORT": [], "NEUTRAL": []}
+        for r in results:
+            groups.setdefault(str(r.get("trend") or "NEUTRAL"), []).append(r)
+        icons = {"LONG": "🟢", "SHORT": "🔴", "NEUTRAL": "⚪"}
         lines = [title]
-        for i, r in enumerate(results, 1):
-            pat = r.get("pattern") or {}
-            pat_txt = f" {pat['name']}" if pat.get("name") else ""
-            sm = r.get("smart_money") or {}
-            sm_dir = sm.get("direction") if sm else None
-            sm_txt = f" sm={sm_dir}" if sm_dir and sm_dir != "NEUTRAL" else ""
-            lines.append(
-                f"{i}. {r['symbol']} {r['trend']} rsi={r['rsi']} vol_x{r['vol']} 25c={r['chg']}%{pat_txt}{sm_txt}"
-            )
-        return "\n".join(lines) if len(lines) > 1 else f"{title}: tidak ada kandidat"
+        for trend in ("LONG", "SHORT", "NEUTRAL"):
+            grp = groups.get(trend, [])
+            if not grp:
+                continue
+            lines.append(f"{icons[trend]} {trend} ({len(grp)})")
+            for i, r in enumerate(grp, 1):
+                pat = r.get("pattern") or {}
+                pat_txt = f" · {pat['name']}" if pat.get("name") else ""
+                sm = r.get("smart_money") or {}
+                sm_dir = sm.get("direction") if sm else None
+                sm_txt = f" · sm={sm_dir}" if sm_dir and sm_dir != "NEUTRAL" else ""
+                chg = r.get("chg")
+                chg_txt = f"{chg:+.2f}%" if isinstance(chg, (int, float)) else "-"
+                sym = r["symbol"].replace("/USDT:USDT", "/USDT")
+                lines.append(
+                    f"  {i}. {sym} · RSI {r.get('rsi')} · vol ×{r.get('vol')} · "
+                    f"25c {chg_txt}{pat_txt}{sm_txt}"
+                )
+        return "\n".join(lines)
