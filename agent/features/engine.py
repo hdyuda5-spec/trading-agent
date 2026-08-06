@@ -24,6 +24,7 @@ from agent.features.fvg import FairValueGapFeature
 from agent.features.liquidity import LiquidityFeature, SmartMoneyLiquidityFeature
 from agent.features.market_structure import MarketStructureFeature
 from agent.features.order_block import OrderBlockFeature
+from agent.features.premium_discount import PremiumDiscountFeature
 from agent.features.sentiment import SentimentFeature
 from agent.features.structure import StructureFeature
 from agent.features.trend import TrendFeature
@@ -44,6 +45,7 @@ FEATURE_REGISTRY = (
     MarketStructureFeature,
     FairValueGapFeature,
     OrderBlockFeature,
+    PremiumDiscountFeature,
 )
 
 DF_ONLY_NAMES = frozenset(f.name for f in (TrendFeature, VolatilityFeature, VolumeFeature, StructureFeature))

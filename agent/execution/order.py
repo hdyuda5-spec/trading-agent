@@ -54,9 +54,11 @@ class OrderManager:
                     self.cancel_pending(symbol)
                     self.notifier.info(f"[SKIP] {symbol} entry not filled in time, cancelled")
                     return None
+                conf = signal.get("confidence", 0) or 0
+                conf_disp = conf * 100.0 if 0 <= conf <= 1 else conf
                 self.notifier.info(
                     f"[OPEN] {signal['strategy']} {symbol} {signal['side']} "
-                    f"amt={amount:.4f} @ {fill_price} conf={signal['confidence']:.1f}"
+                    f"amt={amount:.4f} @ {fill_price} conf={conf_disp:.1f}"
                 )
                 self.place_sl_tp(symbol, order, fill_price, side, amount, atr)
                 return order

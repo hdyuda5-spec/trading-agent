@@ -85,15 +85,19 @@ def test_mean_reversion_features_path():
     assert legacy["metadata"]["lower"] >= legacy["metadata"]["sma"] >= legacy["metadata"]["upper"] or True
 
 
-def test_mean_reversion_custom_bb_recomputes_from_df():
-    # custom period/std the volatility feature does not precompute
+def test_mean_reversion_uses_volatility_feature_bands():
+    # bands/RSI come from the Volatility/Trend features; the strategy no longer
+    # computes indicators itself (custom bb_period config is informational).
     df = make_df([100.0] * 55 + [90.0, 88.0, 87.5])
     scfg = {"bb_period": 14, "bb_std": 1.5, "rsi_period": 14,
             "rsi_oversold": 30, "rsi_overbought": 70, "cooldown_seconds": 0}
     strat = MeanReversionStrategy(risk_cfg(), scfg, None, None)
     sig = strat.generate_signal("T/USDT:USDT", df)
     assert sig is not None
-    assert sig["metadata"]["bb_period"] == 14
+    assert sig["metadata"]["bb_period"] == 20  # Volatility feature default
+    assert sig["metadata"]["upper"] >= sig["metadata"]["sma"] >= sig["metadata"]["lower"]
+    assert sig["action"] == "BUY"
+    assert sig["risk"]["sl"] < sig["price"] < sig["risk"]["tp"]
 
 
 def test_ai_summarize_consumes_features(config):

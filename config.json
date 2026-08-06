@@ -11,6 +11,13 @@
   "symbols": ["BNB/USDT:USDT"],
   "timeframe": "15m",
 
+  "decision": {
+    "min_margin": 0.15,
+    "weights": {
+      "ai_advisory": 0.20
+    }
+  },
+
   "trend_filter": {
     "enabled": true,
     "timeframe": "1h",
@@ -78,10 +85,11 @@
       }
     },
     "ai_signal": {
-      "enabled": false,
-      "model": "openai/gpt-4o-mini",
-      "base_url": "https://openrouter.ai/api/v1",
-      "prompt_template": "Berikan keputusan trading untuk {symbol} pada timeframe {timeframe}. Data teknikal: {indicators}. Sentimen berita: {news}. Pelajaran dari trade masa lalu bot: {lessons}. Gunakan pelajaran itu untuk menghindari pola yang pernah gagal dan pertahankan pola yang pernah berhasil. Jawab hanya satu kata: LONG, SHORT, atau NEUTRAL, lalu berikan confidence 0-100 dalam format JSON.",
+ "enabled": false,
+ "model": "openai/gpt-4o-mini",
+ "base_url": "https://openrouter.ai/api/v1",
+ "json_mode": true,
+      "prompt_template": "Analisislah {symbol} pada timeframe {timeframe} untuk keperluan advisory. Data teknikal: {indicators}. Sentimen berita: {news}. Pelajaran dari trade masa lalu bot: {lessons}. Gunakan pelajaran itu untuk menghindari pola yang pernah gagal dan pertahankan pola yang pernah berhasil. JANGAN merekomendasikan posisi beli/jual; kamu hanya penasihat. Keluarkan HANYA satu objek JSON tanpa teks lain dengan skema: {\"market_summary\": string, \"trend\": \"bullish\"|\"bearish\"|\"neutral\", \"macro\": string, \"news\": string, \"risk\": string, \"confidence\": number 0-100}.",
       "debate": {
         "enabled": true,
         "bull_prompt": "",

@@ -34,6 +34,10 @@ from agent.features.market_structure import (
     MarketStructureFeature,
 )
 from agent.features.order_block import OrderBlockAnalyzer, OrderBlockFeature
+from agent.features.premium_discount import (
+    PremiumDiscountAnalyzer,
+    PremiumDiscountFeature,
+)
 from agent.features.sentiment import SentimentFeature
 from agent.features.structure import StructureFeature
 from agent.features.trend import TrendFeature
@@ -57,6 +61,8 @@ __all__ = [
     "MarketStructureFeature",
     "OrderBlockAnalyzer",
     "OrderBlockFeature",
+    "PremiumDiscountAnalyzer",
+    "PremiumDiscountFeature",
     "SmartMoneyLiquidityAnalyzer",
     "SmartMoneyLiquidityFeature",
     "SentimentFeature",

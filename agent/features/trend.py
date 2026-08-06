@@ -129,6 +129,10 @@ class TrendFeature(BaseFeature):
             "cross_9_21_event": cross_event(9, 21),
             "cross_21_50_event": cross_event(21, 50),
         }
+        pair = (self.ema_fast, self.ema_slow)
+        if pair not in ((9, 21), (21, 50)):
+            metadata[f"cross_{self.ema_fast}_{self.ema_slow}"] = cross_state(self.ema_fast, self.ema_slow)
+            metadata[f"cross_{self.ema_fast}_{self.ema_slow}_event"] = cross_event(self.ema_fast, self.ema_slow)
         return FeatureResult(self.name, signal, confidence, metadata)
 
     def _confidence(
