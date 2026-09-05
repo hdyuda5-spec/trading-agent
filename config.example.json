@@ -1,0 +1,148 @@
+{
+  "exchange": {
+    "name": "binance",
+    "testnet": true,
+    "options": {
+      "defaultType": "swap",
+      "defaultSubType": "linear",
+      "adjustForTimeDifference": true
+    }
+  },
+  "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+  "timeframe": "15m",
+
+  "trend_filter": {
+    "enabled": true,
+    "timeframe": "1h",
+    "ema_fast": 21,
+    "ema_slow": 50,
+    "symbols": []
+  },
+
+  "risk": {
+    "max_position_pct": 20,
+    "max_total_exposure_pct": 60,
+    "leverage": 3,
+    "max_leverage": 5,
+    "take_profit_pct": 2.0,
+    "stop_loss_pct": 1.0,
+    "trailing_stop_pct": 1.5,
+    "use_atr_trailing": true,
+    "atr_trailing_mult": 2.0,
+    "daily_loss_limit_pct": 5.0,
+    "min_equity_usdt": 20,
+    "max_open_positions": 2,
+    "skip_after_consecutive_losses": 3,
+    "min_fee_tolerance_pct": 0.15,
+    "use_atr_stops": true,
+    "atr_period": 14,
+    "atr_stop_mult": 1.5,
+    "atr_tp_mult": 2.5,
+    "adaptive_sizing": true,
+    "atr_normal_pct": 1.0,
+    "size_volatility_bounds": [0.5, 1.5]
+  },
+
+  "strategies": {
+    "momentum": {
+      "enabled": true,
+      "ema_fast": 9,
+      "ema_slow": 21,
+      "rsi_period": 14,
+      "rsi_oversold": 30,
+      "rsi_overbought": 70,
+      "require_rsi_filter": true,
+      "cooldown_seconds": 900,
+      "sr_filter": {
+        "enabled": true,
+        "window": 3,
+        "cluster_pct": 0.5,
+        "zone_pct": 0.6,
+        "zone_atr_mult": 0.5,
+        "directions": {
+          "LONG": true,
+          "SHORT": true
+        },
+        "symbols": {}
+      }
+    },
+    "ai_signal": {
+      "enabled": false,
+      "model": "openai/gpt-4o-mini",
+      "base_url": "https://openrouter.ai/api/v1",
+      "prompt_template": "Berikan keputusan trading untuk {symbol} pada timeframe {timeframe}. Data teknikal: {indicators}. Sentimen berita: {news}. Pelajaran dari trade masa lalu bot: {lessons}. Gunakan pelajaran itu untuk menghindari pola yang pernah gagal dan pertahankan pola yang pernah berhasil. Jawab hanya satu kata: LONG, SHORT, atau NEUTRAL, lalu berikan confidence 0-100 dalam format JSON.",
+      "confidence_threshold": 65,
+      "news_api_url": "",
+      "min_interval_seconds": 300,
+      "news_max_chars": 500
+    },
+    "grid": {
+      "enabled": false,
+      "grid_levels": 10,
+      "grid_spacing_pct": 0.5,
+      "max_grid_orders": 20,
+      "grid_per_level_pct": 0.5,
+      "grid_rebuild_drift_pct": 3.0
+    }
+  },
+
+  "execution": {
+    "order_type": "market",
+    "position_mode": "one-way",
+    "order_ttl_seconds": 300,
+    "reduce_only_on_close": true,
+    "retry_attempts": 3,
+    "entry_ttl_seconds": 180,
+    "poll_interval_seconds": 60,
+    "one_position_per_symbol": true
+  },
+
+  "telegram": {
+    "enabled": false,
+    "bot_token": "",
+    "chat_id": ""
+  },
+
+  "screener": {
+    "timeframe": "1h",
+    "max_coins": 10,
+    "min_volume_usdt": 20000000,
+    "enabled": true,
+    "auto_interval_minutes": 30,
+    "top_signal_cards": 3,
+    "auto_trade": false,
+    "top_trade_candidates": 3,
+    "require_confirmation": true,
+    "max_extended_pct": 30
+  },
+
+  "pattern": {
+    "enabled": true
+  },
+
+  "smart_money": {
+    "enabled": true,
+    "cvd_trades_limit": 500,
+    "orderbook_depth": 10
+  },
+
+  "whale": {
+    "enabled": true,
+    "interval_minutes": 30,
+    "min_notional_usdt": 50000,
+    "max_coins": 15,
+    "window_minutes": 30,
+    "min_alert_net_usdt": 50000,
+    "filter_trades": true,
+    "min_whale_txns": 2
+  },
+
+  "reporting": {
+    "daily_hour": 8
+  },
+
+  "logging": {
+    "level": "INFO",
+    "file": "logs/agent.log"
+  }
+}

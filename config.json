@@ -1,14 +1,14 @@
 {
   "exchange": {
     "name": "binance",
-    "testnet": false,
+    "testnet": true,
     "options": {
       "defaultType": "swap",
       "defaultSubType": "linear",
       "adjustForTimeDifference": true
     }
   },
-  "symbols": ["BNB/USDT:USDT"],
+  "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
   "timeframe": "15m",
 
   "trading": {
@@ -57,10 +57,10 @@
   },
 
   "risk": {
-    "max_position_pct": 10,
-    "max_total_exposure_pct": 30,
-    "leverage": 10,
-    "max_leverage": 10,
+    "max_position_pct": 20,
+    "max_total_exposure_pct": 60,
+    "leverage": 3,
+    "max_leverage": 5,
     "take_profit_pct": 2.0,
     "stop_loss_pct": 1.0,
     "min_stop_distance_pct": 0.3,
@@ -75,14 +75,14 @@
     "min_fee_tolerance_pct": 0.15,
     "use_atr_stops": true,
     "atr_period": 14,
-    "atr_stop_mult": 1.0,
+    "atr_stop_mult": 1.5,
     "atr_tp_mult": 2.5,
     "sl_fixed_pct": 2.5,
     "tp_fixed_pct": 3.0,
     "max_stop_distance_pct": 3.0,
     "adaptive_sizing": true,
     "atr_normal_pct": 1.0,
-    "size_volatility_bounds": [0.8, 1.5],
+    "size_volatility_bounds": [0.5, 1.5],
     "fixed_notional_usdt": 2,
     "fixed_notional_max_equity_usdt": 100
   },
@@ -107,18 +107,14 @@
           "LONG": true,
           "SHORT": true
         },
-        "symbols": {
-          "SOL/USDT:USDT": {
-            "enabled": false
-          }
-        }
+        "symbols": {}
       }
     },
     "ai_signal": {
- "enabled": false,
- "model": "openai/gpt-4o-mini",
- "base_url": "https://openrouter.ai/api/v1",
- "json_mode": true,
+      "enabled": false,
+      "model": "openai/gpt-4o-mini",
+      "base_url": "https://openrouter.ai/api/v1",
+      "json_mode": true,
       "prompt_template": "Analisislah {symbol} pada timeframe {timeframe} untuk keperluan advisory. Data teknikal: {indicators}. Sentimen berita: {news}. Pelajaran dari trade masa lalu bot: {lessons}. Gunakan pelajaran itu untuk menghindari pola yang pernah gagal dan pertahankan pola yang pernah berhasil. JANGAN merekomendasikan posisi beli/jual; kamu hanya penasihat. Keluarkan HANYA satu objek JSON tanpa teks lain dengan skema: {\"market_summary\": string, \"trend\": \"bullish\"|\"bearish\"|\"neutral\", \"macro\": string, \"news\": string, \"risk\": string, \"confidence\": number 0-100}.",
       "debate": {
         "enabled": true,
@@ -181,7 +177,7 @@
   },
 
   "telegram": {
-    "enabled": true,
+    "enabled": false,
     "bot_token": "",
     "chat_id": ""
   },
