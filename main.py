@@ -3,6 +3,7 @@ import json
 import os
 
 from agent.bot import TradingBot
+from agent.core.config_validate import validate_or_raise
 from agent.core.utils import setup_logger
 
 
@@ -18,6 +19,7 @@ def main():
     args = parser.parse_args()
 
     config = load_config(args.config)
+    validate_or_raise(config)  # fail fast sebelum start
     setup_logger(
         config["logging"].get("level", "INFO"),
         config["logging"].get("file", "logs/agent.log"),

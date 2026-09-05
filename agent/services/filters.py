@@ -1,6 +1,7 @@
 """Shared pre-trade filters used by the signal and screener services."""
 
 import logging
+import time
 
 from agent.core.whale import should_execute_trade
 
@@ -12,6 +13,16 @@ class TradeFilters:
 
     def __init__(self, config):
         self.config = config
+
+    def trading_hours_ok(self) -> bool:
+        """Block auto-trade during configured no-trade hours (WIB = UTC+7)."""
+        sc = self.config.get("screener", {}) or {}
+        blocked = set(int(h) for h in (sc.get("no_trade_hours_wib", []) or []))
+        if not blocked:
+            return True
+        utc_hour = int(time.time() // 3600) % 24
+        wib_hour = (utc_hour + 7) % 24
+        return wib_hour not in blocked
 
     def losing_streak(self, symbol, side, store):
         limit = int(self.config["risk"].get("skip_after_consecutive_losses", 0))

@@ -17,13 +17,16 @@ logger = logging.getLogger("trading-agent")
 
 
 class CandleStore:
-    def __init__(self):
+    def __init__(self, maxlen: int = 800):
         self._dfs: dict = {}
+        self._maxlen = int(maxlen)
         self._lock = threading.RLock()
 
     def seed(self, symbol: str, ohlcv) -> None:
         """Set the full history for a symbol (REST bootstrap)."""
         df = ohlcv_to_dataframe(ohlcv) if not isinstance(ohlcv, pd.DataFrame) else ohlcv
+        if self._maxlen and len(df) > self._maxlen:
+            df = df.tail(self._maxlen)
         with self._lock:
             self._dfs[symbol] = df
 
@@ -65,7 +68,10 @@ class CandleStore:
                 frame = ohlcv_to_dataframe(
                     [[ts, candle["o"], candle["h"], candle["l"], candle["c"], candle["v"]]]
                 )
-                self._dfs[symbol] = pd.concat([df, frame])
+                combined = pd.concat([df, frame])
+                if self._maxlen and len(combined) > self._maxlen:
+                    combined = combined.tail(self._maxlen)
+                self._dfs[symbol] = combined
 
     def apply_candle_event(self, event) -> None:
         data = event.data

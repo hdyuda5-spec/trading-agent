@@ -101,14 +101,8 @@ class Screener:
             for i, r in enumerate(grp, 1):
                 pat = r.get("pattern") or {}
                 pat_txt = f" · {pat['name']}" if pat.get("name") else ""
-                sm = r.get("smart_money") or {}
-                sm_dir = sm.get("direction") if sm else None
-                sm_txt = f" · sm={sm_dir}" if sm_dir and sm_dir != "NEUTRAL" else ""
                 chg = r.get("chg")
                 chg_txt = f"{chg:+.2f}%" if isinstance(chg, (int, float)) else "-"
                 sym = r["symbol"].replace("/USDT:USDT", "/USDT")
-                lines.append(
-                    f"  {i}. {sym} · RSI {r.get('rsi')} · vol ×{r.get('vol')} · "
-                    f"25c {chg_txt}{pat_txt}{sm_txt}"
-                )
+                lines.append(f"  {i}. {sym} · RSI {r.get('rsi')} · {chg_txt}{pat_txt}")
         return "\n".join(lines)

@@ -11,10 +11,35 @@
   "symbols": ["BNB/USDT:USDT"],
   "timeframe": "15m",
 
+  "trading": {
+    "mode": "paper",
+    "paper": {
+      "initial_balance_usdt": 1000,
+      "fee_pct": 0.05
+    }
+  },
+
   "decision": {
     "min_margin": 0.15,
+    "thresholds": {
+      "long": 0.0,
+      "short": 0.0
+    },
+    "ticket_ttl_seconds": 300,
+    "regime": {
+      "high_vol_atr_pct": 2.0,
+      "adx_min": 20
+    },
     "weights": {
-      "ai_advisory": 0.20
+      "ai_advisory": 0.20,
+      "technical": 2,
+      "trend": 2,
+      "momentum": 1,
+      "liquidity": 3,
+      "order_flow": 2,
+      "whale": 1,
+      "pattern": 1,
+      "news": 1
     }
   },
 
@@ -34,8 +59,8 @@
   "risk": {
     "max_position_pct": 10,
     "max_total_exposure_pct": 30,
-    "leverage": 5,
-    "max_leverage": 5,
+    "leverage": 10,
+    "max_leverage": 10,
     "take_profit_pct": 2.0,
     "stop_loss_pct": 1.0,
     "min_stop_distance_pct": 0.3,
@@ -52,9 +77,14 @@
     "atr_period": 14,
     "atr_stop_mult": 1.0,
     "atr_tp_mult": 2.5,
+    "sl_fixed_pct": 2.5,
+    "tp_fixed_pct": 3.0,
+    "max_stop_distance_pct": 3.0,
     "adaptive_sizing": true,
     "atr_normal_pct": 1.0,
-    "size_volatility_bounds": [0.8, 1.5]
+    "size_volatility_bounds": [0.8, 1.5],
+    "fixed_notional_usdt": 2,
+    "fixed_notional_max_equity_usdt": 100
   },
 
   "strategies": {
@@ -117,6 +147,18 @@
       "rsi_oversold": 30,
       "rsi_overbought": 70
     },
+    "support_resistance": {
+      "enabled": true,
+      "zone_pct": 0.8,
+      "min_distance_pct": 0.3,
+      "require_reversal": true,
+      "cooldown_seconds": 900,
+      "oppose_limit": -0.5,
+      "directions": {
+        "LONG": true,
+        "SHORT": true
+      }
+    },
     "grid": {
       "enabled": false,
       "grid_levels": 10,
@@ -150,18 +192,48 @@
     "min_volume_usdt": 5000000,
     "exclude_symbols": [
       "XAU/USDT:USDT",
-      "MU/USDT:USDT"
+      "MU/USDT:USDT",
+      "SNDK/USDT:USDT",
+      "TUT/USDT:USDT",
+      "SOXL/USDT:USDT",
+      "SNXX/USDT:USDT",
+      "SPCX/USDT:USDT",
+      "KOMA/USDT:USDT",
+      "BLESS/USDT:USDT"
     ],
     "enabled": true,
     "auto_interval_minutes": 30,
+    "no_trade_hours_wib": [2, 7, 10, 11, 13, 20],
     "top_signal_cards": 3,
-    "auto_trade": true,
+    "auto_trade": false,
     "top_trade_candidates": 3,
     "rsi_confirmation": true,
     "rsi_long_range": [40, 75],
     "rsi_short_range": [25, 60],
     "require_confirmation": true,
-    "max_extended_pct": 30
+    "max_extended_pct": 15,
+    "news": [],
+    "scoring": {
+      "min_confidence": 0.6,
+      "min_margin": 0.1,
+      "weights": {
+        "liquidity": 0.25,
+        "structure": 0.2,
+        "trend": 0.15,
+        "volume": 0.15,
+        "funding": 0.1,
+        "open_interest": 0.1,
+        "whale": 0.05
+      },
+      "rsi_bonus": 0.03,
+      "rsi_max_penalty": 0.12,
+      "sentiment_max_adjust": 0.1,
+      "news_max_adjust": 0.1,
+      "streak_penalty": 0.08,
+      "max_buy_chg_pct": 10,
+      "regime_penalty": 0.1,
+      "extreme_move_max_penalty": 0.2
+    }
   },
 
   "pattern": {
@@ -183,7 +255,8 @@
       "structure",
       "whale",
       "sentiment",
-      "funding"
+      "funding",
+      "open_interest"
     ],
     "market_cache_ttl": 300,
     "trend": {
@@ -209,6 +282,10 @@
     },
     "funding": {
       "extreme_rate": 0.0001
+    },
+    "open_interest": {
+      "timeframe": "1h",
+      "history_limit": 20
     }
   },
 

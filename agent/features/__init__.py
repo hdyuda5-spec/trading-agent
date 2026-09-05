@@ -33,6 +33,7 @@ from agent.features.market_structure import (
     MarketStructureAnalyzer,
     MarketStructureFeature,
 )
+from agent.features.open_interest import OpenInterestFeature
 from agent.features.order_block import OrderBlockAnalyzer, OrderBlockFeature
 from agent.features.premium_discount import (
     PremiumDiscountAnalyzer,
@@ -59,6 +60,7 @@ __all__ = [
     "LiquidityFeature",
     "MarketStructureAnalyzer",
     "MarketStructureFeature",
+    "OpenInterestFeature",
     "OrderBlockAnalyzer",
     "OrderBlockFeature",
     "PremiumDiscountAnalyzer",

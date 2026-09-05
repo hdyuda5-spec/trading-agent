@@ -225,6 +225,21 @@ class TestManage:
         assert any("Daily loss limit" in str(a) for a in svc._notifier.alerts)
         assert svc._orders.closed == [SYMBOL]
 
+    def test_daily_loss_alert_fires_once_while_halted(self, svc):
+        svc.risk.set_initial_equity(1000.0)
+        pos = long_pos(100.0)
+        svc.manage(950.0, [pos])
+        svc.manage(940.0, [])
+        assert svc.halted is True
+        assert sum("Daily loss limit" in str(a) for a in svc._notifier.alerts) == 1
+
+    def test_daily_loss_unhalts_when_equity_recovers(self, svc):
+        svc.risk.set_initial_equity(1000.0)
+        svc.manage(950.0, [])
+        assert svc.halted is True
+        svc.manage(990.0, [])
+        assert svc.halted is False
+
     def test_guard_sl_tp_skips_when_disabled(self, svc):
         svc.config = {"execution": {"reduce_only_on_close": False}}
         svc._exchange.positions = [long_pos()]
@@ -239,6 +254,45 @@ class TestManage:
         assert SYMBOL not in svc.trailing
         assert len(svc._store.trades) == 1
         assert svc._store.trades[0][0][7] == "sl_tp"
+
+
+class TestConcurrency:
+    def test_trailing_snapshot_is_isolated_copy(self, svc):
+        svc.trailing[SYMBOL] = {"side": "long", "peak": 100.0, "entry": 95.0}
+        snap = svc.trailing_snapshot()
+        snap[SYMBOL]["peak"] = 999.0
+        assert svc.trailing[SYMBOL]["peak"] == 100.0
+
+    def test_concurrent_mutation_and_snapshot_no_runtime_error(self, svc):
+        import threading
+
+        stop = threading.Event()
+        errors = []
+
+        def mutator(prefix):
+            try:
+                i = 0
+                while not stop.is_set():
+                    sym = f"{prefix}/{i}/USDT"
+                    svc.set_trade_meta(sym, "screener", {"entry": 100.0 + i}, 0.5)
+                    svc.trailing[sym] = {"side": "long", "peak": 101.0 + i, "entry": 100.0 + i}
+                    svc.pop_trade_meta(sym)
+                    svc.trailing.pop(sym, None)
+                    i += 1
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        threads = [threading.Thread(target=mutator, args=(f"SYM{t}",)) for t in range(4)]
+        for t in threads:
+            t.start()
+        try:
+            for _ in range(200):
+                svc.trailing_snapshot()
+        finally:
+            stop.set()
+        for t in threads:
+            t.join(timeout=5)
+        assert errors == []
 
 
 class TestClosePosition:

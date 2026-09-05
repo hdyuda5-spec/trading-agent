@@ -105,6 +105,11 @@ class TelegramController:
             "/trend": self._trend,
             "/screen": self._screen_cmd,
             "/health": self._health,
+            "/funnel": self._funnel,
+            "/reject": self._funnel_rejects,
+            "/decisions": self._decisions,
+            "/missed": self._missed,
+            "/paper": self._paper,
         }
         handler = handlers.get(cmd)
         return handler() if handler else self._help()
@@ -128,6 +133,11 @@ class TelegramController:
             "/trend - arah tren tiap simbol\n"
             "/screen - screening koin (trend/volume)\n"
             "/health - uptime & kesehatan bot\n"
+            "/funnel - signal funnel (telemetri jalur entry)\n"
+            "/reject - alasan penolakan terbanyak\n"
+            "/decisions - trail keputusan decision engine\n"
+            "/missed - missed trades (pertimbangan dilewatkan)\n"
+            "/paper - status mode paper trading\n"
             "/instruksi - panduan lengkap\n"
             "/help - bantuan ini"
         )
@@ -153,6 +163,61 @@ class TelegramController:
             "- screening koin di laporan harian\n\n"
             "⚠️ Selalu mulai dengan testnet. Bot ini bukan saran keuangan."
         )
+
+    def _paper(self):
+        b = self.bot
+        mode = str(b.config.get("trading", {}).get("mode", "paper")).lower()
+        if b.paper is not None:
+            snap = b.paper.snapshot()
+            return (
+                f"📄 Paper mode: ON\n"
+                f"Balance: {snap['balance_usdt']:.2f} USDT\n"
+                f"Positions: {len(snap['positions'])} | Open orders: {snap['open_orders']}\n"
+                f"Trading.mode = {mode!r} (set \"live\" + screener.auto_trade=true untuk live)"
+            )
+        return f"📄 Paper mode: OFF (trading.mode={mode!r})"
+
+    def _funnel(self):
+        b = self.bot
+        f = b.funnel.snapshot()
+        lines = ["🔻 Signal funnel:"] + [f"  {k}: {v}" for k, v in f.items() if v]
+        return "\n".join(lines) if len(lines) > 1 else "Funnel masih kosong."
+
+    def _funnel_rejects(self):
+        b = self.bot
+        rejects = b.funnel.rejects()
+        if not rejects:
+            return "Belum ada penolakan tercatat."
+        lines = ["🚫 Alasan penolakan:"] + [f"  {code}: {n}" for code, n in rejects.items()]
+        return "\n".join(lines)
+
+    def _decisions(self):
+        b = self.bot
+        try:
+            summary = b.store.decision_summary(limit=8)
+        except Exception:
+            return "Decision trail tidak tersedia."
+        by = summary.get("by_status") or {}
+        lines = ["🧠 Decision trail:",
+                 f"  PASS: {by.get('PASS', 0)} | WAIT: {by.get('WAIT', 0)} | REJECT: {by.get('REJECT', 0)}"]
+        codes = summary.get("by_reason_code") or []
+        if codes:
+            lines.append("  Reject: " + ", ".join(f"{c['reason_code']}x{c['count']}" for c in codes[:6]))
+        return "\n".join(lines)
+
+    def _missed(self):
+        b = self.bot
+        try:
+            m = b.store.missed_trades_summary(limit=6)
+        except Exception:
+            return "Missed-trade journal tidak tersedia."
+        lines = ["⏭️ Missed trades:"]
+        by = m.get("by_reason_code") or []
+        lines += [f"  {c['reason_code']}: {c['count']}" for c in by[:6]]
+        recent = m.get("recent") or []
+        for r in recent[:4]:
+            lines.append(f"  - {r['symbol']} {r['side']} [{r['reason_code']}]")
+        return "\n".join(lines) if len(lines) > 1 else "Belum ada missed trade."
 
     def _status(self):
         b = self.bot

@@ -3,21 +3,26 @@
 The service is the consumer of the ``FeatureEngine -> DecisionEngine`` stack
 for the live strategies (momentum, ai_signal). It reads every indicator from
 feature outputs (via the strategies), applies the shared pre-trade filters,
-lets the ``RiskEngine`` gate the entry, and hands the Decision to the
-ExecutionService. It never places orders itself.
+lets the ``RiskEngine`` gate the entry, runs the explainable
+``UnifiedDecisionEngine`` (hard veto + evidence score), mints a
+``TradeTicket``, and hands it to the ExecutionService. It never places orders
+itself.
 """
 
 import logging
 import threading
 
 from agent.core.utils import is_valid_atr
+from agent.decision.ticket import TradeTicket
 from agent.services.filters import TradeFilters
 
 logger = logging.getLogger("trading-agent")
 
 
 class SignalService:
-    def __init__(self, config, exchange, notifier, risk, execution, feature_engine, strategies, trend, whale, portfolio, candles):
+    def __init__(self, config, exchange, notifier, risk, execution, feature_engine, strategies,
+                 trend, whale, portfolio, candles, *, store=None, decision_engine=None,
+                 funnel=None, missed_journal=None):
         self.config = config
         self.exchange = exchange
         self.notifier = notifier
@@ -29,6 +34,10 @@ class SignalService:
         self.whale = whale
         self.portfolio = portfolio
         self.candles = candles
+        self.store = store
+        self.decision_engine = decision_engine
+        self.funnel = funnel
+        self.missed_journal = missed_journal
         self.filters = TradeFilters(config)
         self.one_per_symbol = config["execution"].get("one_position_per_symbol", True)
         self._lock = threading.RLock()
@@ -37,7 +46,7 @@ class SignalService:
         if df is None or len(df) < 5:
             return
         for strategy in self.strategies:
-            if strategy.name not in ("momentum", "ai_signal"):
+            if strategy.name not in ("momentum", "ai_signal", "support_resistance"):
                 continue
             try:
                 self._evaluate_strategy(strategy, symbol, df, positions, equity, atr)
@@ -49,6 +58,8 @@ class SignalService:
         signal = strategy.generate_signal(symbol, df, features=features)
         if not signal:
             return
+        if self.funnel:
+            self.funnel.inc("strategy_signals")
         if not is_valid_atr(atr):
             logger.info("%s skipped for %s: ATR invalid (%s)", strategy.name, symbol, atr)
             return
@@ -87,6 +98,9 @@ class SignalService:
             if self.filters.losing_streak(symbol, signal["side"], self.portfolio.store):
                 logger.info("%s skipped for %s: pola kalah beruntun", strategy.name, symbol)
                 return
+            if not self.filters.trading_hours_ok():
+                logger.info("%s skipped for %s: di luar jam trading", strategy.name, symbol)
+                return
             fee_pct = 0.02 if self.config["execution"]["order_type"] == "limit" else 0.05
             cost_ok, spread = self.risk.check_fee_tolerance(symbol, fee_pct)
             if not cost_ok:
@@ -100,13 +114,114 @@ class SignalService:
             decision_risk = signal.get("risk") or {}
             sl = decision_risk.get("sl") or self.risk.build_stop_loss(entry, signal["side"], atr)
             tp1 = decision_risk.get("tp") or self.risk.build_take_profit(entry, signal["side"], atr)
-            tp2 = tp1 + (tp1 - entry)
-            self.notifier.send_signal(symbol, signal["side"], entry, sl, tp1, tp2, strategy.name)
+            ticket = self._gate(symbol, df, features, signal, positions, equity, entry, sl, tp1, atr)
+            if ticket is None:
+                return
+            self.notifier.send_signal(symbol, signal["side"], entry, sl, tp1, strategy.name)
             setup = self.portfolio.capture_setup(
                 symbol, signal["side"], entry, atr, signal.get("metadata"), signal.get("confidence")
             )
             self.portfolio.set_trade_meta(symbol, strategy.name, setup, signal.get("confidence"))
-            self.execution.open_position(symbol, signal, equity, atr)
+            self.execution.open_position(symbol, signal, equity, atr, ticket=ticket)
+
+    # -- decision gateway -------------------------------------------------
+
+    def _gate(self, symbol, df, features, signal, positions, equity, entry, sl, tp1, atr):
+        """Run the explainable decision engine; return a TradeTicket or None.
+
+        Default thresholds are lenient (0.0), so the engine is informational
+        until configured — but hard vetoes (invalid price, SL/TP, daily loss,
+        min equity, halted) always win over a strategy signal.
+        """
+        if self.decision_engine is None:
+            return None
+        verdict = self.decision_engine.assess(
+            symbol, df, features=features,
+            advisory=signal.get("advisory"),
+            strategy_side=signal["side"],
+            signal_conf=signal.get("confidence"),
+            equity=equity, positions=positions,
+            price=entry, sl=sl, tp=tp1, atr=atr,
+        )
+        self._record_decision(verdict)
+        if verdict.should_block():
+            self._blocked(symbol, signal, verdict)
+            return None
+        ticket = self._build_ticket(symbol, signal, verdict, entry, sl, tp1, atr, equity)
+        if ticket is not None:
+            self._persist_ticket(ticket)
+            if self.funnel:
+                self.funnel.inc("tickets_created")
+                try:
+                    self.funnel.save()
+                except Exception:
+                    pass
+        return ticket
+
+    def _build_ticket(self, symbol, signal, verdict, entry, sl, tp1, atr, equity):
+        if verdict.side is None:
+            return None
+        risk_amount = size = rr = None
+        try:
+            risk_amount = self.risk.risk_per_trade_amount(equity)
+            size = self.risk.risk_position_size(symbol, entry, verdict.side, atr=atr, equity=equity, stop_loss=sl)
+            rr = self.risk.validate_rr(entry, sl, tp1, verdict.side) if sl and tp1 else None
+        except Exception:
+            pass
+        ttl = float((self.config.get("decision", {}) or {}).get("ticket_ttl_seconds", 300) or 300)
+        leverage = getattr(self.risk, "cfg", {}).get("leverage", 1) if hasattr(self.risk, "cfg") else 1.0
+        return TradeTicket.new(
+            symbol, verdict.side, signal.get("strategy") or "live", entry,
+            stop_loss=sl, take_profit=tp1,
+            risk_pct=float((self.config.get("risk", {}) or {}).get("risk_per_trade_pct", 1.0)),
+            risk_amount=float(risk_amount or 0.0),
+            position_size=size,
+            leverage=float(leverage),
+            atr=atr, rr=rr,
+            score=verdict.score, confidence=verdict.confidence, regime=verdict.regime,
+            reasons=list(verdict.reasons), evidence=verdict.evidence_dicts(),
+            ttl_seconds=ttl, metadata={"source": "signal_service"},
+        )
+
+    def _record_decision(self, verdict):
+        if self.store is None:
+            return
+        try:
+            self.store.save_decision(
+                symbol=verdict.symbol, status=verdict.status, action=verdict.action,
+                score=verdict.score, confidence=verdict.confidence, regime=verdict.regime,
+                reason_code=verdict.reason_code, reasons=verdict.reasons,
+                evidence=verdict.evidence_dicts(), weight=verdict.weights,
+            )
+        except Exception:
+            pass
+
+    def _persist_ticket(self, ticket):
+        if self.store is None:
+            return
+        try:
+            self.store.save_ticket(ticket)
+        except Exception:
+            pass
+
+    def _blocked(self, symbol, signal, verdict):
+        code = verdict.reason_code or "UNKNOWN"
+        if self.funnel:
+            self.funnel.reject(code)
+            try:
+                self.funnel.save()
+            except Exception:
+                pass
+        if self.missed_journal is not None:
+            try:
+                self.missed_journal.record(
+                    symbol, signal["side"], signal.get("strategy") or "live", code,
+                    verdict.rejection.reason if verdict.rejection else "",
+                    price=signal.get("price"), score=verdict.score,
+                )
+            except Exception:
+                pass
+        logger.info("[DECISION] %s blocked %s: %s (%s)", symbol, signal["side"], code, verdict.regime)
 
     def _whale_symbols(self):
         symbols = list(self.config["symbols"])

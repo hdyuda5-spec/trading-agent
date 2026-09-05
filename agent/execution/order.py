@@ -1,6 +1,7 @@
 import logging
 import time
 
+from agent.core.timestamps import order_age_seconds
 from agent.core.utils import is_valid_atr
 
 logger = logging.getLogger("trading-agent")
@@ -19,7 +20,7 @@ class OrderManager:
             return "LONG" if side == "buy" else "SHORT"
         return None
 
-    def open_position(self, symbol, signal, equity, atr=None):
+    def open_position(self, symbol, signal, equity, atr=None, ticket=None):
         if not is_valid_atr(atr):
             self.notifier.info(f"[SKIP] {symbol}: ATR invalid ({atr}), entry dibatalkan")
             return None
@@ -37,18 +38,26 @@ class OrderManager:
 
         for attempt in range(self.cfg["retry_attempts"]):
             try:
+                idem = None
+                if ticket is not None:
+                    prefix = self.cfg.get("client_order_id_prefix", "tbot") or "tbot"
+                    idem = f"{prefix}-{ticket.ticket_id.lower()}"
                 if order_type == "limit":
                     price = self._best_book_price(symbol, side) or live_price
+                    params = {"postOnly": True, "clientOrderId": idem} if idem else {"postOnly": True}
                     order = self.exchange.create_order(
                         symbol,
                         "limit",
                         side,
                         amount,
                         price=price,
-                        params={"postOnly": True},
+                        params=params,
                     )
                 else:
-                    order = self.exchange.create_order(symbol, "market", side, amount)
+                    order = self.exchange.create_order(
+                        symbol, "market", side, amount,
+                        params={"clientOrderId": idem} if idem else None,
+                    )
                 fill_price = self._wait_fill(symbol, order)
                 if fill_price is None:
                     self.cancel_pending(symbol)
@@ -77,6 +86,11 @@ class OrderManager:
                     leverage=leverage,
                     equity=equity,
                 )
+                if ticket is not None:
+                    order_id = order.get("id")
+                    info = order.get("info") or {}
+                    exchange_order_id = info.get("orderId") or order.get("clientOrderId")
+                    ticket.mark_filled(order_id, exchange_order_id, "market" if order_type == "market" else "limit")
                 return order
             except Exception as e:
                 logger.warning("open retry %s/%s failed: %s", attempt + 1, self.cfg["retry_attempts"], e)
@@ -103,12 +117,14 @@ class OrderManager:
             pass
         return None
 
+    _FILLED = ("filled", "closed")
+
     def _wait_fill(self, symbol, order):
         status = order.get("status")
         if status in ("canceled", "rejected", "expired"):
             return None
         avg = order.get("average") or order.get("price")
-        if status == "filled":
+        if status in self._FILLED:
             return float(avg) if avg else self._live_price(symbol)
         if self.cfg["order_type"] == "market":
             try:
@@ -117,21 +133,34 @@ class OrderManager:
                 fetched = None
             f = fetched or order
             avg = f.get("average") or f.get("price")
-            if f.get("status") == "filled":
+            if f.get("status") in self._FILLED:
                 return float(avg) if avg else self._live_price(symbol)
             if f.get("status") in ("canceled", "rejected", "expired"):
                 return None
             return self._live_price(symbol)
         ttl = self.cfg.get("entry_ttl_seconds", 180)
         deadline = time.time() + ttl
+        order_id = order.get("id")
+        last_seen = status
         while time.time() < deadline:
             try:
-                fetched = self.exchange.fetch_order(order["id"], symbol)
+                f = self.exchange.fetch_order(order_id, symbol)
             except Exception:
-                fetched = None
-            f = fetched or order
+                f = None
+            if f is None:
+                try:
+                    open_ids = {o.get("id") for o in (self.exchange.fetch_open_orders(symbol) or [])}
+                    if order_id not in open_ids:
+                        f = self.exchange.fetch_order(order_id, symbol)
+                except Exception:
+                    f = None
+            if f is None:
+                f = order
             status = f.get("status")
-            if status == "filled":
+            if status != last_seen:
+                logger.info("[FILL] %s order %s status -> %s", symbol, order_id, status)
+                last_seen = status
+            if status in self._FILLED:
                 avg = f.get("average") or f.get("price")
                 return float(avg) if avg else self._live_price(symbol)
             if status in ("canceled", "rejected", "expired"):
@@ -143,6 +172,7 @@ class OrderManager:
         try:
             if not self.cfg["reduce_only_on_close"]:
                 return
+            atr = self._fetch_atr(symbol, atr)
             tp_price = self.risk.build_take_profit(entry_price, side, atr)
             sl_price = self.risk.build_stop_loss(entry_price, side, atr)
             if tp_price is None or sl_price is None:
@@ -174,24 +204,38 @@ class OrderManager:
             params=self._reduce_only_params(side, extra),
         )
 
+    def _fetch_atr(self, symbol, atr=None):
+        """ATR for the symbol; falls back to a live OHLCV fetch so screener
+        symbols outside ``config.symbols`` still get SL/TP protection."""
+        if is_valid_atr(atr):
+            return atr
+        try:
+            from agent.core.utils import compute_atr, ohlcv_to_dataframe
+
+            tf = "1h"
+            ohlcv = self.exchange.fetch_ohlcv(symbol, tf, limit=100)
+            df = ohlcv_to_dataframe(ohlcv)
+            period = self.risk.cfg.get("atr_period", 14)
+            value = float(compute_atr(df, period).iloc[-1])
+            return value if is_valid_atr(value) else None
+        except Exception:
+            return None
+
     def _place_stop(self, symbol, side, amount, sl_price):
         try:
-            return self.exchange.create_order(
-                symbol,
-                "stop_market",
-                side,
-                amount,
-                params=self._reduce_only_params(side, {"stopPrice": sl_price}),
-            )
+            return self.exchange.create_stop_order(symbol, side, sl_price, amount=amount)
         except Exception:
-            return self.exchange.create_order(
-                symbol,
-                "limit",
-                side,
-                amount,
-                price=sl_price,
-                params=self._reduce_only_params(side, {"stopLossPrice": sl_price}),
-            )
+            try:
+                return self.exchange.create_order(
+                    symbol,
+                    "limit",
+                    side,
+                    amount,
+                    price=sl_price,
+                    params=self._reduce_only_params(side, {"stopLossPrice": sl_price}),
+                )
+            except Exception:
+                return None
 
     def close_all(self, symbol):
         positions = self.exchange.fetch_positions([symbol])
@@ -244,25 +288,50 @@ class OrderManager:
             orders = self.exchange.fetch_open_orders(symbol)
         except Exception:
             return
-        now = time.time()
         for o in orders:
+            # reduce-only SL/TP guards are protection, never auto-cancel them.
             if o.get("reduceOnly"):
                 continue
-            ts = o.get("timestamp")
-            if not ts:
+            if not o.get("id") or not o.get("symbol"):
                 continue
-            age = (now - ts / 1000.0) * 60 if ts > 1e12 else now - ts
-            if age > ttl:
+            ts = o.get("timestamp")
+            age = order_age_seconds(ts)
+            if ts and age > ttl:
                 try:
                     self.exchange.cancel_order(o["id"], o["symbol"])
                     self.notifier.info(f"[CANCEL-STALE] {o['symbol']} age={age/60:.1f}m")
                 except Exception as e:
                     logger.warning("cancel stale %s failed: %s", o["id"], e)
+        self._cancel_stale_stops(ttl, symbol)
+
+    def _cancel_stale_stops(self, ttl, symbol=None) -> None:
+        """Cancel orphaned conditional (algo) stop orders.
+
+        Algo stops live outside ``fetch_open_orders`` and are never seen by the
+        regular stale sweep; if a position is closed/reversed while a stop is
+        still triggered-pending it can fire against a new opposite position.
+        """
+        try:
+            stops = self.exchange.fetch_open_stop_orders(symbol) or []
+        except Exception:
+            return
+        for s in stops:
+            ts = s.get("timestamp") or s.get("triggerTime") or s.get("updateTime")
+            age = order_age_seconds(ts)
+            if ts and age > ttl:
+                try:
+                    self.exchange.cancel_stop_order(s.get("algoId") or s.get("id"), s.get("symbol") or symbol)
+                    self.notifier.info(f"[CANCEL-STALE-STOP] {(s.get('symbol') or symbol)} age={age/60:.1f}m")
+                except Exception as e:
+                    logger.warning("cancel stale stop %s failed: %s", s.get("id"), e)
 
     def _open_algo_orders(self, symbol):
         try:
             s = symbol.replace("/USDT:USDT", "USDT")
-            return self.exchange.client.fapiPrivateGetOpenAlgoOrders({"symbol": s}) or []
+            result = self.exchange.client.fapiPrivateGetOpenAlgoOrders({"symbol": s})
+            if isinstance(result, dict):
+                return result.get("orders") or []
+            return result or []
         except Exception:
             return []
 
@@ -270,6 +339,7 @@ class OrderManager:
         if not self.cfg["reduce_only_on_close"]:
             return
         try:
+            atr = self._fetch_atr(symbol, atr)
             tp_price = self.risk.build_take_profit(entry, side, atr)
             sl_price = self.risk.build_stop_loss(entry, side, atr)
             if tp_price is None or sl_price is None:
@@ -280,7 +350,8 @@ class OrderManager:
             tp_side = "sell" if side == "buy" else "buy"
             algo = self._open_algo_orders(symbol)
             has_sl = any(
-                (o.get("orderType") or "").startswith("STOP") and float(o.get("quantity") or 0) > 0
+                (o.get("orderType") or "").startswith("STOP")
+                and str(o.get("algoStatus") or "").upper() not in ("CANCELED", "EXPIRED")
                 for o in algo
             )
             if not has_sl:

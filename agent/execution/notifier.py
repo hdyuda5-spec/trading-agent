@@ -54,21 +54,18 @@ def _pct_of(value, entry):
     return f"{(value / entry - 1) * 100:+.1f}%" if entry else "-"
 
 
-def format_signal_card(symbol, side, entry, sl, tp1, tp2, pattern="", ts=None):
+def format_signal_card(symbol, side, entry, sl, tp, pattern="", ts=None):
     side_label = "BUY" if side == "LONG" else "SELL"
     icon = "🟢" if side == "LONG" else "🔴"
     sym = _sym(symbol)
-    lines = [
-        f"{icon} SINYAL {side_label} — {sym}",
-        "──────────────",
-        f"📊 Pattern : {pattern or '-'}",
-        f"💰 Entry   : {entry:,.2f}",
-        f"🛡️ SL      : {sl:,.2f} ({_pct_of(sl, entry)})",
-        f"🎯 TP1     : {tp1:,.2f} ({_pct_of(tp1, entry)})",
-        f"🎯 TP2     : {tp2:,.2f} ({_pct_of(tp2, entry)})",
+    return "\n".join([
+        f"{icon} {side_label} {sym}",
+        f"📡 {pattern or '-'}",
+        f"💰 Entry: {entry:,.2f}",
+        f"🛡️ SL   : {sl:,.2f} ({_pct_of(sl, entry)})",
+        f"🎯 TP   : {tp:,.2f} ({_pct_of(tp, entry)})",
         f"⏰ {fmt_wib(ts)}",
-    ]
-    return "\n".join(lines)
+    ])
 
 
 def format_close_card(symbol, side, entry, exit_px, qty, pnl, pnl_pct, reason="", strategy="", ts=None):
@@ -76,16 +73,14 @@ def format_close_card(symbol, side, entry, exit_px, qty, pnl, pnl_pct, reason=""
     side_label = "LONG" if side == "long" else "SHORT"
     icon = "✅" if pnl >= 0 else "❌"
     reason_label = _CLOSE_REASON_LABELS.get(reason, reason or "-")
-    pct = f"{pnl_pct:+.1f}%"
+    meta = reason_label
+    if strategy and strategy != "-":
+        meta += f" · {strategy}"
     return "\n".join([
-        f"{icon} POSISI DITUTUP — {sym} ({side_label})",
-        "──────────────",
-        f"📊 Strategi: {strategy or '-'}",
-        f"💰 Entry   : {entry:,.2f}",
-        f"💱 Exit    : {exit_px:,.2f}",
-        f"🧮 Qty     : {qty:.6g}",
-        f"💵 PnL     : {pnl:+.2f} USDT ({pct})",
-        f"📌 Alasan  : {reason_label}",
+        f"{icon} TUTUP {sym} {side_label}",
+        f"💰 {entry:,.2f} → {exit_px:,.2f} ({qty:.6g})",
+        f"💵 PnL: {pnl:+.2f} USDT ({pnl_pct:+.1f}%)",
+        f"📌 {meta}",
         f"⏰ {fmt_wib(ts)}",
     ])
 
@@ -94,20 +89,20 @@ def format_open_card(symbol, side, entry, qty, sl=None, tp=None, strategy="", le
     side_label = "LONG" if str(side).upper() in ("LONG", "BUY") else "SHORT"
     icon = "🟢" if side_label == "LONG" else "🔴"
     lines = [
-        f"{icon} POSISI TERBUKA — {_sym(symbol)} ({side_label})",
-        "──────────────",
-        f"📊 Strategi: {strategy or '-'}",
-        f"💰 Entry   : {entry:,.2f}",
-        f"🧮 Qty     : {qty:.6g}",
+        f"{icon} BUKA {_sym(symbol)} {side_label}",
+        f"💰 Entry: {entry:,.2f} · Qty {qty:.6g}",
     ]
     if sl:
-        lines.append(f"🛡️ SL      : {sl:,.2f} ({_pct_of(sl, entry)})")
+        lines.append(f"🛡️ SL   : {sl:,.2f} ({_pct_of(sl, entry)})")
     if tp:
-        lines.append(f"🎯 TP      : {tp:,.2f} ({_pct_of(tp, entry)})")
+        lines.append(f"🎯 TP   : {tp:,.2f} ({_pct_of(tp, entry)})")
+    meta = []
     if leverage:
-        lines.append(f"⚙️ Leverage: {leverage}x · Notional: {entry * qty:,.2f} USDT")
+        meta.append(f"{leverage}x")
     if equity:
-        lines.append(f"💼 Equity  : {equity:,.2f} USDT")
+        meta.append(f"Equity {equity:,.2f} USDT")
+    if meta:
+        lines.append(f"⚙️ {' · '.join(meta)}")
     lines.append(f"⏰ {fmt_wib(ts)}")
     return "\n".join(lines)
 
@@ -142,9 +137,9 @@ class Notifier:
         logger.info(text.replace("\n", " | "))
         self._tg_send(text)
 
-    def send_signal(self, symbol, side, entry, sl, tp1, tp2, strategy="", ts=None):
+    def send_signal(self, symbol, side, entry, sl, tp, strategy="", ts=None):
         pattern = _PATTERN_LABELS.get(strategy, strategy or "-")
-        text = format_signal_card(symbol, side, entry, sl, tp1, tp2, pattern, ts)
+        text = format_signal_card(symbol, side, entry, sl, tp, pattern, ts)
         logger.info(text.replace("\n", " | "))
         self._tg_send(text)
 

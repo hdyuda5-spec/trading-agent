@@ -156,7 +156,7 @@ class WhaleDetector:
             return "🐋 Tidak ada aktivitas whale dalam window"
         longs = [e for e in events if e["direction"] == "LONG"]
         shorts = [e for e in events if e["direction"] != "LONG"]
-        lines = [f"🐋 WHALE DETECTOR • {len(events)} simbol aktif"]
+        lines = [f"🐋 WHALE · {len(events)} simbol"]
         for grp, icon, label in ((longs, "🟢", "BELI BERSIH"), (shorts, "🔴", "JUAL BERSIH")):
             if not grp:
                 continue
@@ -164,8 +164,5 @@ class WhaleDetector:
             for e in grp:
                 sym = e["symbol"].replace("/USDT:USDT", "/USDT")
                 net = f"{'+' if e['net_usdt'] >= 0 else ''}{fmt_usdt(e['net_usdt'])} USDT"
-                lines.append(
-                    f"  {sym} {net} · {e['n']}x · "
-                    f"beli {fmt_usdt(e['buy_usdt'])} / jual {fmt_usdt(e['sell_usdt'])}"
-                )
+                lines.append(f"  {sym}: {net} ({e['n']}x)")
         return "\n".join(lines)

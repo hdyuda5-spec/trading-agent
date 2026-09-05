@@ -17,7 +17,8 @@ logger = logging.getLogger("trading-agent")
 
 
 class ExecutionService:
-    def __init__(self, config, exchange, risk, orders, notifier, strategies, whale, portfolio):
+    def __init__(self, config, exchange, risk, orders, notifier, strategies, whale, portfolio,
+                 *, store=None, funnel=None):
         self.config = config
         self.exchange = exchange
         self.risk = risk
@@ -26,12 +27,42 @@ class ExecutionService:
         self.strategies = strategies
         self.whale = whale
         self.portfolio = portfolio
+        self.store = store
+        self.funnel = funnel
         self.filters = TradeFilters(config)
 
     # -- order lifecycle -------------------------------------------------
 
-    def open_position(self, symbol, signal, equity, atr):
-        return self.orders.open_position(symbol, signal, equity, atr)
+    def open_position(self, symbol, signal, equity, atr, ticket=None):
+        order = self.orders.open_position(symbol, signal, equity, atr, ticket=ticket)
+        if order is not None and ticket is not None:
+            if self.funnel:
+                self.funnel.inc("fills")
+                self.funnel.notify("ticket_filled", symbol=symbol, ticket_id=ticket.ticket_id)
+                try:
+                    self.funnel.save()
+                except Exception:
+                    pass
+            self._persist_ticket(ticket)
+        elif order is None and ticket is not None:
+            status = "EXPIRED" if ticket.expired() else "CANCELLED"
+            ticket.mark(status, "ticket tidak terisi")
+            if self.funnel:
+                self.funnel.inc("expired" if status == "EXPIRED" else "cancelled")
+                try:
+                    self.funnel.save()
+                except Exception:
+                    pass
+            self._persist_ticket(ticket)
+        return order
+
+    def _persist_ticket(self, ticket):
+        if self.store is None:
+            return
+        try:
+            self.store.save_ticket(ticket)
+        except Exception:
+            pass
 
     def cancel_stale_orders(self, ttl: int = 0) -> None:
         try:
@@ -51,7 +82,6 @@ class ExecutionService:
         limits = m.get("limits", {})
         min_cost = float((limits.get("cost") or {}).get("min") or 0)
         min_amt = float((limits.get("amount") or {}).get("min") or 0)
-        max_pos_pct = self.config["risk"].get("max_position_pct", 60) / 100.0
         exposure_pct = self.config["risk"].get("max_total_exposure_pct", 90) / 100.0
         ok, spread = self.risk.check_fee_tolerance(symbol)
         if not ok:
@@ -67,17 +97,10 @@ class ExecutionService:
         budget = max(0.0, equity * exposure_pct - used - pending)
         if min_cost and budget < min_cost:
             return False, None, f"budget {budget:.2f} < minCost {min_cost:.0f}"
-        factor = 1.0
-        if atr and price:
-            atr_pct = atr / price
-            if atr_pct > 0:
-                normal_pct = self.config["risk"].get("atr_normal_pct", 1.0) / 100.0
-                bounds = self.config["risk"].get("size_volatility_bounds", [0.9, 2.0])
-                factor = max(bounds[0], min(bounds[1], normal_pct / atr_pct))
-        desired = min(equity * max_pos_pct * factor, budget)
+        desired = min(self.risk.notional(equity, price, atr), budget)
         if desired <= 0:
             return False, None, "budget habis"
-        equity_eff = desired / (max_pos_pct * factor) if max_pos_pct * factor > 0 else equity
+        equity_eff = self.risk.equity_for_notional(desired, price, atr)
         qty = self.risk.compute_position_size(symbol, price, equity_eff, "buy" if side == "LONG" else "sell", atr)
         try:
             qty = float(self.exchange.client.amount_to_precision(symbol, qty))

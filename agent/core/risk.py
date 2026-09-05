@@ -24,6 +24,7 @@ Backward compatibility:
   read-only properties backed by the ``DrawdownPolicy``.
 """
 
+import math
 from typing import Any, Dict, List, Optional
 
 from agent.core.utils import is_valid_atr
@@ -36,26 +37,110 @@ class BasePolicy:
 
 
 class PositionSizingPolicy(BasePolicy):
-    """Converts equity + price (+ optional ATR) into a base quantity."""
+    """Converts equity + price (+ optional ATR) into a base quantity.
+
+    Small-account rule: when ``risk.fixed_notional_usdt`` is set (>0) and the
+    available equity is below ``risk.fixed_notional_max_equity_usdt`` (default
+    100), every position uses a fixed notional (default 5 USDT) instead of the
+    percent-of-equity sizing. At or above that threshold the risk-based sizing
+    (``max_position_pct`` + optional ATR adaptivity) applies.
+
+    The resulting quantity is rounded *up* to the exchange's amount step so it
+    never truncates below a symbol's minimum notional (``minCost``).
+    """
 
     name = "position_sizing"
 
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, exchange=None):
         self.cfg = cfg
+        self.exchange = exchange
+        self.fixed_notional = float(cfg.get("fixed_notional_usdt", 0) or 0)
+        self.fixed_threshold = float(cfg.get("fixed_notional_max_equity_usdt", 100) or 0)
 
-    def compute_position_size(self, symbol, price, equity, direction, atr=None):
-        max_pos = self.cfg["max_position_pct"]
-        qty_usd = equity * (max_pos / 100.0)
+    def _amount_step(self, symbol):
+        """Smallest tradable quantity step for the symbol.
+
+        Prefers the exchange LOT_SIZE ``stepSize`` when exposed in market info;
+        otherwise derives it from ``precision.amount``. For TICK_SIZE-style
+        precision (Binance) the amount precision already *is* the step; only
+        DECIMAL_PLACES precision (e.g. Bybit) needs ``10 ** -precision``.
+        """
+        if self.exchange is None:
+            return None
+        client = getattr(self.exchange, "client", None)
+        if client is None:
+            return None
+        m = (getattr(client, "markets", None) or {}).get(symbol)
+        if not m:
+            return None
+        info = m.get("info") or {}
+        for f in info.get("filters") or []:
+            if f.get("filterType") in ("LOT_SIZE", "SIZE_INC", "tickSize"):
+                raw = f.get("stepSize") or f.get("sizeIncrement")
+                if raw:
+                    try:
+                        return float(raw)
+                    except (TypeError, ValueError):
+                        break
+        prec = (m.get("precision") or {}).get("amount")
+        if prec is None:
+            return None
+        try:
+            prec = float(prec)
+        except (TypeError, ValueError):
+            return None
+        if m.get("precisionMode") == 1:
+            return 10 ** -prec
+        return prec
+
+    def _use_fixed(self, equity: float) -> bool:
+        return self.fixed_notional > 0 and (
+            self.fixed_threshold <= 0 or equity < self.fixed_threshold
+        )
+
+    def _volatility_factor(self, price, atr) -> float:
         if is_valid_atr(atr) and price and self.cfg.get("adaptive_sizing", False):
             bounds = self.cfg.get("size_volatility_bounds", [0.5, 2.0])
             normal_pct = self.cfg.get("atr_normal_pct", 1.0) / 100.0
             atr_pct = atr / price
             if atr_pct > 0:
                 factor = normal_pct / atr_pct
-                factor = max(bounds[0], min(bounds[1], factor))
-                qty_usd *= factor
-        size = qty_usd / price
+                return max(bounds[0], min(bounds[1], factor))
+        return 1.0
+
+    def notional(self, equity: float, price, atr=None) -> float:
+        """Target position notional in USDT for the given equity."""
+        equity = max(0.0, float(equity))
+        if self._use_fixed(equity):
+            return min(self.fixed_notional, equity)
+        qty_usd = equity * (self.cfg["max_position_pct"] / 100.0)
+        return qty_usd * self._volatility_factor(price, atr)
+
+    def compute_position_size(self, symbol, price, equity, direction, atr=None):
+        qty_usd = self.notional(equity, price, atr)
+        size = qty_usd / price if price and price > 0 else 0.0
+        step = self._amount_step(symbol)
+        if step and step > 0 and size > 0:
+            size = math.ceil(size / step - 1e-9) * step
         return size
+
+    def equity_for_notional(self, desired: float, price, atr=None) -> float:
+        """Equity value whose notional equals ``desired``.
+
+        Keeps the screener preflight budget check and the exchange-side sizing
+        (``compute_position_size``) in agreement. The mode is derived from the
+        equivalent equity, not from the desired notional itself.
+        """
+        desired = max(0.0, float(desired))
+        max_pos = self.cfg["max_position_pct"] / 100.0
+        factor = self._volatility_factor(price, atr)
+        denom = max_pos * factor
+        if denom <= 0:
+            return desired
+        risk_equiv = desired / denom
+        if self.fixed_notional <= 0 or self.fixed_threshold <= 0 or risk_equiv >= self.fixed_threshold:
+            return risk_equiv
+        return desired
 
 
 class ExposurePolicy(BasePolicy):
@@ -108,6 +193,12 @@ class StopLossPolicy(BasePolicy):
         dist = self.cfg.get("atr_stop_mult", 1.5) * atr
         if dist <= 0:
             return None
+        fixed_pct = float(self.cfg.get("sl_fixed_pct", 0) or 0)
+        if fixed_pct > 0:
+            dist = min(dist, entry_price * fixed_pct / 100.0)
+        cap_pct = float(self.cfg.get("max_stop_distance_pct", 0) or 0)
+        if cap_pct > 0:
+            dist = min(dist, entry_price * cap_pct / 100.0)
         if side == "buy":
             return round(entry_price - dist, 8)
         return round(entry_price + dist, 8)
@@ -140,6 +231,9 @@ class TakeProfitPolicy(BasePolicy):
         dist = self.cfg.get("atr_tp_mult", 2.5) * atr
         if dist <= 0:
             return None
+        fixed_pct = float(self.cfg.get("tp_fixed_pct", 0) or 0)
+        if fixed_pct > 0:
+            dist = min(dist, entry_price * fixed_pct / 100.0)
         if side == "buy":
             return round(entry_price + dist, 8)
         return round(entry_price - dist, 8)
@@ -230,13 +324,103 @@ class ValidationPolicy(BasePolicy):
             return False, float("inf")
 
 
+class RiskBasedSizingPolicy(BasePolicy):
+    """Risk-per-trade position sizing (Phase 8).
+
+    Size is derived from how much equity we are willing to lose if the stop is
+    hit, instead of a blind percent-of-equity notional:
+
+        risk_amount = equity × (risk_per_trade_pct / 100)
+        size        = risk_amount / abs(entry - stop_loss)
+
+    The resulting notional is capped at ``max_position_pct`` of equity so a very
+    tight stop cannot blow through the exposure budget, and rounded up to the
+    exchange amount step (never truncating below minCost).
+    """
+
+    name = "risk_based_sizing"
+
+    def __init__(self, cfg: dict, exchange=None):
+        self.cfg = cfg
+        self.exchange = exchange
+        self._step = PositionSizingPolicy(cfg, exchange)
+
+    def risk_per_trade_amount(self, equity: float) -> float:
+        equity = max(0.0, float(equity))
+        pct = float(self.cfg.get("risk_per_trade_pct", 1.0))
+        return equity * (pct / 100.0)
+
+    def risk_position_size(self, symbol, price, side, atr=None, equity=None, stop_loss=None) -> float:
+        if equity is None or equity <= 0 or price is None or price <= 0:
+            return 0.0
+        if stop_loss is None:
+            stop_loss = StopLossPolicy(self.cfg).build_stop_loss(price, side, atr)
+        if stop_loss is None:
+            return 0.0
+        dist = abs(price - stop_loss)
+        if dist <= 0 or price <= 0:
+            return 0.0
+        risk_amount = self.risk_per_trade_amount(equity)
+        if risk_amount <= 0:
+            return 0.0
+        size = risk_amount / dist          # qty (base units) = risk / SL distance
+        notional = size * price
+        max_pos = self.cfg.get("max_position_pct", 10) / 100.0
+        cap = equity * max_pos
+        if cap > 0:
+            if notional > cap:
+                notional = cap
+                size = notional / price
+        if notional <= 0 or size <= 0:
+            return 0.0
+        step = self._step._amount_step(symbol)
+        if step and step > 0 and size > 0:
+            size = math.ceil(size / step - 1e-9) * step
+        return size
+
+
+class RRValidationPolicy(BasePolicy):
+    """Risk-reward validation before an order (Phase 9).
+
+    LONG:  risk = entry - SL, reward = TP - entry, RR = reward / risk
+    SHORT: risk = SL - entry, reward = entry - TP, RR = reward / risk
+
+    Returns ``(ok, reason_code, value)`` where ``reason_code`` is one of
+    ``OK``, ``RR_TOO_LOW``, ``INVALID_LEVEL``, ``INVALID_SL``.
+    """
+
+    name = "rr_validation"
+
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
+        self.min_rr = float(cfg.get("min_rr", 1.5))
+
+    def validate(self, entry, stop_loss, take_profit, side=None) -> tuple:
+        try:
+            entry, sl, tp = float(entry), float(stop_loss), float(take_profit)
+        except (TypeError, ValueError):
+            return False, "INVALID_LEVEL", "entry/SL/TP bukan angka"
+        if entry <= 0 or sl <= 0 or tp <= 0:
+            return False, "INVALID_LEVEL", "entry/SL/TP harus > 0"
+        risk = abs(entry - sl)
+        reward = abs(tp - entry)
+        if risk <= 0:
+            return False, "INVALID_SL", "SL setara entry (zero risk)"
+        rr = reward / risk
+        if float(rr) < self.min_rr:
+            return False, "RR_TOO_LOW", f"RR {rr:.2f} < min_rr {self.min_rr:.2f}"
+        return True, "OK", rr
+
+
 POLICY_FACTORIES = {
-    "position_sizing": lambda cfg, exchange: PositionSizingPolicy(cfg),
+    "position_sizing": lambda cfg, exchange: PositionSizingPolicy(cfg, exchange),
     "exposure": lambda cfg, exchange: ExposurePolicy(cfg, exchange),
     "stop_loss": lambda cfg, exchange: StopLossPolicy(cfg),
     "take_profit": lambda cfg, exchange: TakeProfitPolicy(cfg),
     "leverage": lambda cfg, exchange: LeveragePolicy(cfg, exchange),
     "drawdown": lambda cfg, exchange: DrawdownPolicy(cfg),
+    "risk_based_sizing": lambda cfg, exchange: RiskBasedSizingPolicy(cfg, exchange),
+    "rr_validation": lambda cfg, exchange: RRValidationPolicy(cfg),
 }
 
 
@@ -261,6 +445,8 @@ class RiskEngine:
         self.leverage = self.policies["leverage"]
         self.drawdown = self.policies["drawdown"]
         self.validation = self.policies["validation"]
+        self.risk_sizing = self.policies["risk_based_sizing"]
+        self.rr_validation = self.policies["rr_validation"]
 
     def _compose(self, overrides: dict) -> Dict[str, BasePolicy]:
         built: Dict[str, BasePolicy] = {}
@@ -289,6 +475,23 @@ class RiskEngine:
     # -- Position sizing -------------------------------------------------
     def compute_position_size(self, symbol, price, equity, direction, atr=None):
         return self.position_sizing.compute_position_size(symbol, price, equity, direction, atr)
+
+    def notional(self, equity, price, atr=None):
+        return self.position_sizing.notional(equity, price, atr)
+
+    def equity_for_notional(self, desired, price, atr=None):
+        return self.position_sizing.equity_for_notional(desired, price, atr)
+
+    # -- Risk-per-trade sizing (Phase 8) --------------------------------
+    def risk_per_trade_amount(self, equity):
+        return self.risk_sizing.risk_per_trade_amount(equity)
+
+    def risk_position_size(self, symbol, price, side, atr=None, equity=None, stop_loss=None):
+        return self.risk_sizing.risk_position_size(symbol, price, side, atr, equity, stop_loss)
+
+    # -- RR validation (Phase 9) ----------------------------------------
+    def validate_rr(self, entry, stop_loss, take_profit, side=None):
+        return self.rr_validation.validate(entry, stop_loss, take_profit, side)
 
     # -- Exposure --------------------------------------------------------
     def exposure_ok(self, positions, equity=None):

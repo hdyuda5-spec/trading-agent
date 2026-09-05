@@ -27,6 +27,12 @@ Bot trading otomatis multi-strategi untuk Binance / Bybit / OKX futures. Satu ko
 - **Hemat API call** — 1 `fetch_balance`/tick, batch tickers, OHLCV paralel (ThreadPool).
 - **Notifikasi** via Telegram (opsional): perintah `/status`, `/positions`, `/balance`, `/metrics`, `/trend`, `/screen` (screening koin), `/instruksi` (panduan), + **laporan harian otomatis** (bisa diatur jannya via `reporting.daily_hour`).
 - **Screening koin** — scan semua market USDT-M, sortir berdasarkan volume, tampilkan tren (EMA9/21/50) + RSI + rasio volume (konfigurasi di `screener`).
+- **Decision Engine (V2)** — pipeline explainable `HardVeto → Regime → Evidence → Verdict (PASS/WAIT/REJECT)` dengan `reason_code`, `TradeTicket` ber-idempotency, telemetri signal funnel, missed-trade journal, dan trade reviewer. Semua keputusan + tiket dipersist ke `TradeStore` v2.
+- **Paper trading (default)** — `trading.mode: "paper"` menjalankan seluruh stack terhadap harga pasar **sungguhan** tetapi dengan akun tentur (simulasi balance/posisi). Pergi live = `trading.mode:"live"` + `screener.auto_trade:true` (saat ini `false`).
+- **Config fail-fast** — validasi `config.json` sebelum start (`agent.core.config_validate`), secret tidak pernah masuk log (`agent.core.secrets`).
+- **Perintah Telegram baru**: `/funnel`, `/reject`, `/decisions`, `/missed`, `/paper`.
+
+Dokumentasi build baru: `docs/DECISION_ENGINE.md`, `docs/RISK_ENGINE.md`, `docs/EXECUTION.md`, `docs/LIQUIDITY_ENGINE.md`, `docs/PAPER_TRADING.md`, `docs/OPERATIONS.md`, `docs/ARCHITECTURE_AUDIT.md`.
 
 ## Setup
 
@@ -85,28 +91,45 @@ python backtest.py --symbol BTC/USDT:USDT --mainnet                   # data his
 
 ```
 agent/
-  bot.py                 # main loop & manajemen posisi
+  bot.py                 # orchestrator (event-driven), wiring services
   core/
     exchange.py          # ccxt wrapper (sync + testnet)
-    risk.py              # sizing, exposure, SL/TP/ATR, fee filter, daily loss
+    risk.py              # policy engine: sizing, exposure, SL/TP, RR, daily loss
+    config_validate.py   # fail-fast config validation
+    timestamps.py        # unit-agnostic order age (ms/s/us)
+    secrets.py           # redaksi secret untuk log
     trend.py             # filter tren multi-timeframe (EMA)
     utils.py             # EMA, RSI, ATR, logger
+  decision/
+    engine.py            # UnifiedDecisionEngine (veto+regime+evidence+verdict)
+    types.py             # DecisionVerdict, EvidenceItem, Rejection
+    weights.py           # weights/thresholds dari config
+    regime.py            # MarketRegimeEngine
+    evidence.py          # HardVeto + EvidenceCollector
+    ticket.py            # TradeTicket
+    telemetry.py         # SignalFunnel
+    reviewer.py          # TradeReviewer + MissedTradeJournal
   strategies/
     momentum.py          # EMA cross + RSI filter + cooldown
     ai_signal.py         # LLM signal (thread, cache, sanitize)
     grid.py              # grid trading (pairing + re-center)
   execution/
-    order.py             # open, SL/TP (multi-exchange), close_all
+    order.py             # open, SL/TP, close_all, stale-order sweep
+    paper.py             # PaperExchange (mode paper)
     notifier.py          # Telegram + log
+    telegram_ctl.py      # /funnel /reject /decisions /missed /paper ...
   data/
-    storage.py           # CandleStore (memory/SQLite)
-    trades.py            # TradeStore (riwayat trade + state)
+    trades.py            # TradeStore v2 (trades + decisions/tickets/funnel/journal)
+  services/
+    signals.py           # live entry: filters -> decision gate -> ticket
+    screener_service.py  # auto-screen + auto-trade candidate (decision-gated)
+    execution.py         # order lifecycle + funnel persistence
+    candle_store.py      # bounded candle cache (800 bars)
+    portfolio.py, reporting.py, whale_service.py, ...
 backtest.py              # backtest strategi
-main.py                  # entry point (--check, --config)
-config.json              # konfigurasi utama
-deploy/
-  trading-agent.service  # unit systemd (auto-restart)
-  ecosystem.config.js    # pm2 (auto-restart)
+main.py                  # entry point (--check --config; validate fail-fast)
+config.json              # konfigurasi utama (trading.mode=paper default)
+ecosystem.config.js      # pm2 (repo-local logs)
 ```
 
 ## Auto-restart (live server)

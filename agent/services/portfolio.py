@@ -112,19 +112,25 @@ class PortfolioService:
             return {"side": "LONG" if side == "long" else "SHORT", "pos": pos}
         return None
 
+    def trailing_snapshot(self) -> Dict[str, dict]:
+        with self._lock:
+            return {k: dict(v) for k, v in self.trailing.items()}
+
     def set_trade_meta(self, symbol: str, strategy: str, setup: dict, confidence: float) -> None:
-        self._position_strategy[symbol] = strategy
-        self._position_setup[symbol] = setup
-        self._position_confidence[symbol] = confidence
+        with self._lock:
+            self._position_strategy[symbol] = strategy
+            self._position_setup[symbol] = setup
+            self._position_confidence[symbol] = confidence
 
     def pop_trade_meta(self, symbol: str) -> tuple:
-        strategy = self._position_strategy.pop(symbol, "bot")
-        setup = self._position_setup.pop(symbol, {}) or {}
-        if setup.get("confidence") is None:
-            setup["confidence"] = self._position_confidence.pop(symbol, None)
-        else:
-            self._position_confidence.pop(symbol, None)
-        return strategy, setup
+        with self._lock:
+            strategy = self._position_strategy.pop(symbol, "bot")
+            setup = self._position_setup.pop(symbol, {}) or {}
+            if setup.get("confidence") is None:
+                setup["confidence"] = self._position_confidence.pop(symbol, None)
+            else:
+                self._position_confidence.pop(symbol, None)
+            return strategy, setup
 
     def capture_setup(self, symbol, side, entry, atr, metadata=None, confidence=None) -> dict:
         return {
@@ -145,63 +151,83 @@ class PortfolioService:
             return None
         return atr if is_valid_atr(atr) else None
 
+    def _position_atr(self, symbol) -> Optional[float]:
+        """ATR for a position; falls back to a live OHLCV fetch so screener
+        symbols outside ``config.symbols`` still get trailing protection."""
+        atr = self.atr_of(self.candles.get(symbol))
+        if is_valid_atr(atr):
+            return atr
+        try:
+            from agent.core.utils import ohlcv_to_dataframe
+
+            ohlcv = self.exchange.fetch_ohlcv(symbol, "1h", limit=100)
+            df = ohlcv_to_dataframe(ohlcv)
+            value = float(compute_atr(df, self.config["risk"].get("atr_period", 14)).iloc[-1])
+            return value if is_valid_atr(value) else None
+        except Exception:
+            return None
+
     # -- lifecycle: manage, guard, close ---------------------------------
 
     def manage(self, equity: float, positions: List[dict]) -> None:
         """Daily-loss halt, trailing stops, external-close reconciliation."""
         self._last_tick = time.time()
-        if self.risk.daily_loss_exceeded(equity):
-            self.notifier.alert("Daily loss limit reached, closing all positions", "")
-            seen = set()
+        with self._lock:
+            if self.risk.daily_loss_exceeded(equity):
+                seen = set()
+                for pos in positions:
+                    symbol = pos.get("symbol")
+                    if not symbol or symbol in seen or abs(float(pos.get("contracts") or 0)) == 0:
+                        continue
+                    seen.add(symbol)
+                    self.close_position(pos, "daily_loss")
+                if not self.halted:
+                    self.halted = True
+                    self.notifier.alert("Daily loss limit reached, closing all positions", "")
+                return
+            self.halted = False
+            try:
+                tickers = self.exchange.fetch_tickers()
+            except Exception:
+                tickers = {}
             for pos in positions:
-                symbol = pos.get("symbol")
-                if not symbol or symbol in seen or abs(float(pos.get("contracts") or 0)) == 0:
+                contracts = abs(float(pos.get("contracts") or 0))
+                if contracts == 0 or not pos.get("symbol"):
                     continue
-                seen.add(symbol)
-                self.close_position(pos, "daily_loss")
-            self.halted = True
-            return
-        try:
-            tickers = self.exchange.fetch_tickers()
-        except Exception:
-            tickers = {}
-        for pos in positions:
-            contracts = abs(float(pos.get("contracts") or 0))
-            if contracts == 0 or not pos.get("symbol"):
-                continue
-            symbol = pos["symbol"]
-            side = self.pos_side(pos)
-            last = float(tickers.get(symbol, {}).get("last") or 0)
-            if last <= 0:
-                continue
-            entry = float(pos.get("entryPrice") or 0)
-            peak = self.trailing.get(symbol, {}).get("peak")
-            if peak is None or (side == "long" and last > peak) or (side == "short" and last < peak):
-                peak = last
-            self.trailing[symbol] = {"side": side, "peak": peak, "entry": entry}
-            atr = self.atr_of(self.candles.get(symbol))
-            if self.risk.trailing_stop_hit(side, peak, last, atr):
-                self.notifier.info(f"[TRAILING] closing {symbol} {side} at {last}")
-                self.close_position(pos, "trailing", last)
-        self._detect_external_closes(positions)
-        now = time.time()
-        self._positions = {
-            p.get("symbol"): p
-            for p in positions
-            if abs(float(p.get("contracts") or 0)) > 0
-            and now - self._closed_at.get(p.get("symbol"), 0) >= 1800
-        }
+                symbol = pos["symbol"]
+                side = self.pos_side(pos)
+                last = float(tickers.get(symbol, {}).get("last") or 0)
+                if last <= 0:
+                    continue
+                entry = float(pos.get("entryPrice") or 0)
+                peak = self.trailing.get(symbol, {}).get("peak")
+                if peak is None or (side == "long" and last > peak) or (side == "short" and last < peak):
+                    peak = last
+                self.trailing[symbol] = {"side": side, "peak": peak, "entry": entry}
+                atr = self._position_atr(symbol)
+                if self.risk.trailing_stop_hit(side, peak, last, atr):
+                    self.notifier.info(f"[TRAILING] closing {symbol} {side} at {last}")
+                    self.close_position(pos, "trailing", last)
+            self._detect_external_closes(positions)
+            now = time.time()
+            self._positions = {
+                p.get("symbol"): p
+                for p in positions
+                if abs(float(p.get("contracts") or 0)) > 0
+                and now - self._closed_at.get(p.get("symbol"), 0) >= 1800
+            }
         self.bus.publish_sync(Event("positions.updated", {"count": len(self._positions)}, source="portfolio"))
 
     def _detect_external_closes(self, positions: List[dict]) -> None:
-        current = {p.get("symbol") for p in positions if abs(float(p.get("contracts") or 0)) > 0}
-        for symbol, old in list(self._positions.items()):
-            if symbol in current:
-                continue
-            if time.time() - self._closed_at.get(symbol, 0) < 1800:
-                continue
-            self._positions.pop(symbol, None)
-            self.close_position(old, "sl_tp")
+        with self._lock:
+            current = {p.get("symbol") for p in positions if abs(float(p.get("contracts") or 0)) > 0}
+            for symbol, old in list(self._positions.items()):
+                if symbol in current:
+                    continue
+                if time.time() - self._closed_at.get(symbol, 0) < 1800:
+                    continue
+                self._positions.pop(symbol, None)
+                self.close_position(old, "sl_tp")
 
     def guard_sl_tp(self) -> None:
         if not self.config["execution"].get("reduce_only_on_close", True):
@@ -210,17 +236,18 @@ class PortfolioService:
             positions = self.exchange.fetch_positions()
         except Exception:
             return
-        for pos in positions:
-            contracts = abs(float(pos.get("contracts") or 0))
-            if contracts == 0 or not pos.get("symbol"):
-                continue
-            symbol = pos["symbol"]
-            side = "buy" if self.pos_side(pos) == "long" else "sell"
-            entry = float(pos.get("entryPrice") or 0)
-            if entry <= 0:
-                continue
-            atr = self.atr_of(self.candles.get(symbol))
-            self.orders.ensure_sl_tp(symbol, side, entry, contracts, atr)
+        with self._lock:
+            for pos in positions:
+                contracts = abs(float(pos.get("contracts") or 0))
+                if contracts == 0 or not pos.get("symbol"):
+                    continue
+                symbol = pos["symbol"]
+                side = "buy" if self.pos_side(pos) == "long" else "sell"
+                entry = float(pos.get("entryPrice") or 0)
+                if entry <= 0:
+                    continue
+                atr = self.atr_of(self.candles.get(symbol))
+                self.orders.ensure_sl_tp(symbol, side, entry, contracts, atr)
 
     def reconcile_stale_trailing(self) -> None:
         try:
@@ -232,57 +259,59 @@ class PortfolioService:
             for p in positions
             if abs(float(p.get("contracts") or 0)) > 0 and p.get("symbol")
         }
-        for symbol in list(self.trailing.keys()):
-            if symbol in open_symbols:
-                continue
-            info = self.trailing.pop(symbol, None)
-            if not info:
-                continue
-            side = info.get("side")
-            entry = float(info.get("entry") or 0)
-            exit_px = self._last_close_price(symbol) or self._price(symbol)
-            if side and entry > 0 and exit_px > 0:
-                contracts = self._recent_contracts(symbol, side)
-                if contracts > 0:
-                    pnl = (exit_px - entry) * contracts if side == "long" else (entry - exit_px) * contracts
-                    pnl_pct = (pnl / (entry * contracts)) * 100
-                    strategy, setup = self.pop_trade_meta(symbol)
-                    self.store.record_trade(symbol, side, entry, exit_px, contracts, pnl, pnl_pct, "sl_tp", strategy)
-                    self.record_experience(symbol, side, strategy, setup, pnl, pnl_pct, "sl_tp")
-                    self.notifier.info(f"[RECONCILE] {symbol} {side} closed eksternal: pnl={pnl:.2f} ({pnl_pct:.1f}%)")
-            self._position_strategy.pop(symbol, None)
-            self._position_setup.pop(symbol, None)
+        with self._lock:
+            for symbol in list(self.trailing.keys()):
+                if symbol in open_symbols:
+                    continue
+                info = self.trailing.pop(symbol, None)
+                if not info:
+                    continue
+                side = info.get("side")
+                entry = float(info.get("entry") or 0)
+                exit_px = self._last_close_price(symbol) or self._price(symbol)
+                if side and entry > 0 and exit_px > 0:
+                    contracts = self._recent_contracts(symbol, side)
+                    if contracts > 0:
+                        pnl = (exit_px - entry) * contracts if side == "long" else (entry - exit_px) * contracts
+                        pnl_pct = (pnl / (entry * contracts)) * 100
+                        strategy, setup = self.pop_trade_meta(symbol)
+                        self.store.record_trade(symbol, side, entry, exit_px, contracts, pnl, pnl_pct, "sl_tp", strategy)
+                        self.record_experience(symbol, side, strategy, setup, pnl, pnl_pct, "sl_tp")
+                        self.notifier.info(f"[RECONCILE] {symbol} {side} closed eksternal: pnl={pnl:.2f} ({pnl_pct:.1f}%)")
+                self._position_strategy.pop(symbol, None)
+                self._position_setup.pop(symbol, None)
 
     def close_position(self, pos, reason: str, price: float = 0.0) -> None:
         symbol = pos.get("symbol")
         if not symbol:
             return
-        self._closed_at[symbol] = time.time()
-        try:
-            live = self.exchange.fetch_positions([symbol])
-        except Exception:
-            live = []
-        live_pos = next((p for p in live if abs(float(p.get("contracts") or 0)) > 0), None)
-        if live_pos is None:
-            self._record_flat_close(pos, reason, price)
-            return
-        contracts = abs(float(live_pos.get("contracts") or 0))
-        if contracts == 0:
-            return
-        if price <= 0:
-            price = self._price(symbol)
-        side = self.pos_side(live_pos)
-        entry = float(live_pos.get("entryPrice") or 0)
-        pnl = (price - entry) * contracts if side == "long" else (entry - price) * contracts
-        pnl_pct = (pnl / (entry * contracts)) * 100 if entry and contracts else 0.0
-        strategy, setup = self.pop_trade_meta(symbol)
-        self.store.record_trade(
-            symbol, side, entry, price, contracts, pnl, pnl_pct, reason, strategy, setup.get("confidence")
-        )
-        self.record_experience(symbol, side, strategy, setup, pnl, pnl_pct, reason)
-        self.orders.close_all(symbol)
-        self._positions.pop(symbol, None)
-        self.trailing.pop(symbol, None)
+        with self._lock:
+            self._closed_at[symbol] = time.time()
+            try:
+                live = self.exchange.fetch_positions([symbol])
+            except Exception:
+                live = []
+            live_pos = next((p for p in live if abs(float(p.get("contracts") or 0)) > 0), None)
+            if live_pos is None:
+                self._record_flat_close(pos, reason, price)
+                return
+            contracts = abs(float(live_pos.get("contracts") or 0))
+            if contracts == 0:
+                return
+            if price <= 0:
+                price = self._price(symbol)
+            side = self.pos_side(live_pos)
+            entry = float(live_pos.get("entryPrice") or 0)
+            pnl = (price - entry) * contracts if side == "long" else (entry - price) * contracts
+            pnl_pct = (pnl / (entry * contracts)) * 100 if entry and contracts else 0.0
+            strategy, setup = self.pop_trade_meta(symbol)
+            self.store.record_trade(
+                symbol, side, entry, price, contracts, pnl, pnl_pct, reason, strategy, setup.get("confidence")
+            )
+            self.record_experience(symbol, side, strategy, setup, pnl, pnl_pct, reason)
+            self.orders.close_all(symbol)
+            self._positions.pop(symbol, None)
+            self.trailing.pop(symbol, None)
         self.notifier.info(f"[CLOSE:{reason}] {symbol} {side} pnl={pnl:.2f} ({pnl_pct:.1f}%)")
         self.notifier.send_close(symbol, side, entry, price, contracts, pnl, pnl_pct, reason, strategy)
         self.bus.publish_sync(Event("trade.closed", {"symbol": symbol, "pnl": pnl, "reason": reason}, source="portfolio"))

@@ -23,6 +23,7 @@ from agent.features.funding import FundingFeature
 from agent.features.fvg import FairValueGapFeature
 from agent.features.liquidity import LiquidityFeature, SmartMoneyLiquidityFeature
 from agent.features.market_structure import MarketStructureFeature
+from agent.features.open_interest import OpenInterestFeature
 from agent.features.order_block import OrderBlockFeature
 from agent.features.premium_discount import PremiumDiscountFeature
 from agent.features.sentiment import SentimentFeature
@@ -41,6 +42,7 @@ FEATURE_REGISTRY = (
     WhaleFeature,
     SentimentFeature,
     FundingFeature,
+    OpenInterestFeature,
     SmartMoneyLiquidityFeature,
     MarketStructureFeature,
     FairValueGapFeature,

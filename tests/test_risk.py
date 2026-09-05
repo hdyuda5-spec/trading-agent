@@ -1,5 +1,7 @@
 """RiskEngine: policy composition, injection and backward compatibility."""
 
+import math
+
 import pytest
 
 from agent.core.risk import (
@@ -84,8 +86,10 @@ def test_engine_composes_all_default_policies(cfg, ex):
         "leverage",
         "drawdown",
         "validation",
+        "risk_based_sizing",
+        "rr_validation",
     }
-    assert len(eng.policies) == 7
+    assert len(eng.policies) == 9
 
 
 def test_validation_policy_receives_peers(cfg, ex):
@@ -144,6 +148,92 @@ def test_position_sizing_atr_clamped_to_bounds(cfg, ex):
     eng = RiskEngine(cfg, ex)
     tiny_atr = eng.compute_position_size("X", 100, 1000, "buy", atr=0.1)
     assert tiny_atr == pytest.approx(1.0 * 2.0)
+
+
+# -- fixed-notional rule (balance < 100 USDT -> 5 USDT) -----------------
+
+
+def fixed_cfg(**overrides):
+    cfg = dict(RISK_CFG)
+    cfg["fixed_notional_usdt"] = 5
+    cfg["fixed_notional_max_equity_usdt"] = 100
+    cfg.update(overrides)
+    return cfg
+
+
+def test_fixed_notional_small_account(cfg, ex):
+    eng = RiskEngine(fixed_cfg(), ex)
+    qty = eng.compute_position_size("X", 100, 25, "buy")
+    assert qty == pytest.approx(0.05)
+    assert eng.notional(25, 100) == pytest.approx(5.0)
+
+
+def test_fixed_notional_capped_by_equity(cfg, ex):
+    eng = RiskEngine(fixed_cfg(), ex)
+    assert eng.notional(3, 100) == pytest.approx(3.0)
+    assert eng.compute_position_size("X", 100, 3, "buy") == pytest.approx(0.03)
+
+
+def test_risk_based_sizing_large_account(cfg, ex):
+    eng = RiskEngine(fixed_cfg(), ex)
+    assert eng.notional(1000, 100) == pytest.approx(100.0)
+    assert eng.compute_position_size("X", 100, 1000, "buy") == pytest.approx(1.0)
+
+
+def test_fixed_notional_off_by_default(cfg, ex):
+    eng = RiskEngine(cfg, ex)
+    assert eng.notional(25, 100) == pytest.approx(2.5)
+
+
+def test_fixed_notional_threshold_boundary(cfg, ex):
+    eng = RiskEngine(fixed_cfg(), ex)
+    assert eng.notional(99.99, 100) == pytest.approx(5.0)
+    assert eng.notional(100.0, 100) == pytest.approx(10.0)
+
+
+class _PreciseClient:
+    def __init__(self, precision=None, precision_mode=0):
+        self.markets = {
+            "SOL/USDT:USDT": {
+                "precisionMode": precision_mode,
+                "precision": {"amount": precision or 0.01},
+                "limits": {"amount": {"min": 0.01}},
+            }
+        }
+
+
+class _PreciseExchange:
+    def __init__(self, precision=None, precision_mode=0):
+        self.client = _PreciseClient(precision, precision_mode)
+
+
+def test_fixed_notional_clears_min_cost_ceil(cfg, ex):
+    eng = RiskEngine(fixed_cfg(), _PreciseExchange())
+    price = 75.94
+    qty = eng.compute_position_size("SOL/USDT:USDT", price, 25, "buy")
+    assert qty == pytest.approx(0.07)
+    assert qty * price >= 5.0
+
+
+def test_ceil_respects_decimal_places(cfg, ex):
+    eng = RiskEngine(fixed_cfg(), _PreciseExchange(precision=3, precision_mode=1))
+    qty = eng.compute_position_size("SOL/USDT:USDT", 1.234, 25, "buy")
+    assert qty == pytest.approx(round(math.ceil(5.0 / 1.234 * 1000) / 1000, 3))
+    assert qty * 1.234 >= 5.0
+
+
+def test_equity_for_notional_fixed_mode(cfg, ex):
+    eng = RiskEngine(fixed_cfg(), ex)
+    assert eng.equity_for_notional(5.0, 100) == pytest.approx(5.0)
+    assert eng.equity_for_notional(3.0, 100) == pytest.approx(3.0)
+
+
+def test_equity_for_notional_risk_mode_invariant(cfg, ex):
+    eng = RiskEngine(fixed_cfg(), ex)
+    for atr in (None, 0.5, 4.0):
+        notional = eng.notional(1000, 100, atr)
+        eq = eng.equity_for_notional(notional, 100, atr)
+        assert eng.notional(eq, 100, atr) == pytest.approx(notional, rel=1e-9)
 
 
 # -- ExposurePolicy ----------------------------------------------------
@@ -208,6 +298,33 @@ def test_take_profit_short(cfg, ex):
     eng = RiskEngine(cfg, ex)
     tp = eng.build_take_profit(100.0, "sell", atr=2.0)
     assert tp == pytest.approx(100.0 - 2.5 * 2.0)
+
+
+def test_stop_loss_capped_by_max_distance(cfg, ex):
+    cfg["max_stop_distance_pct"] = 3.0
+    eng = RiskEngine(cfg, ex)
+    sl = eng.build_stop_loss(100.0, "buy", atr=20.0)
+    assert sl == pytest.approx(100.0 - 3.0)
+
+
+def test_stop_loss_fixed_pct_net_binds(cfg, ex):
+    cfg["sl_fixed_pct"] = 2.5
+    eng = RiskEngine(cfg, ex)
+    sl = eng.build_stop_loss(100.0, "buy", atr=20.0)
+    assert sl == pytest.approx(100.0 - 2.5)
+
+
+def test_stop_loss_unbounded_without_caps(cfg, ex):
+    eng = RiskEngine(cfg, ex)
+    sl = eng.build_stop_loss(100.0, "buy", atr=20.0)
+    assert sl == pytest.approx(100.0 - 20.0)
+
+
+def test_take_profit_fixed_pct_binds(cfg, ex):
+    cfg["tp_fixed_pct"] = 3.0
+    eng = RiskEngine(cfg, ex)
+    tp = eng.build_take_profit(100.0, "buy", atr=50.0)
+    assert tp == pytest.approx(100.0 + 3.0)
 
 
 def test_trailing_stop_atr_hit(cfg, ex):

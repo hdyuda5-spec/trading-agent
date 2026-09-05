@@ -122,6 +122,75 @@ class ExchangeClient:
         except (TypeError, ValueError):
             return None
 
+    # -- conditional (stop) orders -----------------------------------------
+    # Binance now rejects STOP_MARKET on /fapi/v1/order (-4120) and requires
+    # the Algo Order API (POST /fapi/v1/algoOrder, algotype=CONDITIONAL).
+    # ccxt 4.x still routes create_order(stop_market) to the old endpoint, so
+    # we call the raw fapi endpoint directly for binance futures.
+
+    def _market_id(self, symbol):
+        try:
+            m = self.client.markets.get(symbol) or {}
+            return m.get("id") or symbol.replace("/USDT:USDT", "USDT")
+        except Exception:
+            return symbol.replace("/USDT:USDT", "USDT")
+
+    def create_stop_order(self, symbol, side, stop_price, amount=None, position_side=None):
+        """Place a market-triggered stop order that closes the whole position.
+
+        Uses the Binance Futures Algo Order endpoint (``closePosition``), so
+        small positions are not rejected on minimum notional. Falls back to the
+        classic ``create_order(stop_market)`` path on other exchanges.
+        """
+        if self.name != "binance":
+            return self.client.create_order(
+                symbol,
+                "stop_market",
+                side,
+                amount,
+                params={"reduceOnly": True, "stopPrice": stop_price},
+            )
+        try:
+            return self.client.fapiPrivatePostAlgoOrder(
+                {
+                    "symbol": self._market_id(symbol),
+                    "algotype": "CONDITIONAL",
+                    "type": "STOP_MARKET",
+                    "side": side.upper(),
+                    "triggerPrice": self.client.price_to_precision(symbol, stop_price),
+                    "positionSide": position_side or "BOTH",
+                    "workingType": "CONTRACT_PRICE",
+                    "closePosition": "true",
+                }
+            )
+        except Exception:
+            if amount is None:
+                raise
+            return self.client.create_order(symbol, "stop_market", side, amount, params={"reduceOnly": True, "stopPrice": stop_price})
+
+    def fetch_open_stop_orders(self, symbol=None):
+        """List open algo (conditional) stop orders."""
+        if self.name != "binance":
+            return []
+        try:
+            params = {"symbol": self._market_id(symbol)} if symbol else {}
+            result = self.client.fapiPrivateGetOpenAlgoOrders(params)
+            if isinstance(result, dict):
+                return result.get("orders") or []
+            return result or []
+        except Exception:
+            return []
+
+    def cancel_stop_order(self, algo_id, symbol):
+        if self.name != "binance":
+            return None
+        try:
+            return self.client.fapiPrivateDeleteAlgoOrder(
+                {"symbol": self._market_id(symbol), "algoId": algo_id}
+            )
+        except Exception:
+            return None
+
     def check_health(self):
         try:
             self.client.fetch_time()

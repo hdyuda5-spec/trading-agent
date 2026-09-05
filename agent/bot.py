@@ -32,8 +32,12 @@ from agent.core.risk import RiskEngine
 from agent.core.trend import TrendFilter
 from agent.core.whale import WhaleDetector
 from agent.data.trades import TradeStore
+from agent.decision.engine import UnifiedDecisionEngine
+from agent.decision.reviewer import MissedTradeJournal, TradeReviewer
+from agent.decision.telemetry import SignalFunnel
 from agent.execution.notifier import Notifier
 from agent.execution.order import OrderManager
+from agent.execution.paper import PaperExchange
 from agent.execution.telegram_ctl import TelegramController
 from agent.features import build_feature_engine
 from agent.services import (
@@ -63,6 +67,24 @@ class TradingBot:
             testnet=config["exchange"].get("testnet", True),
             options=config["exchange"].get("options", {}),
         )
+        # Trading mode: default PAPER — safe start even if balances/keys are
+        # present. `trading.mode: "live"` must be set explicitly to touch real
+        # funds, and even then `screener.auto_trade` stays false.
+        mode = str(config.get("trading", {}).get("mode", "paper")).lower()
+        if mode == "paper":
+            paper_cfg = config.get("trading", {}).get("paper", {}) or {}
+            initial = float(paper_cfg.get("initial_balance_usdt", 1000.0))
+            fee = float(paper_cfg.get("fee_pct", 0.05))
+            self.paper = PaperExchange(self.exchange, initial_balance_usdt=initial, fee_pct=fee)
+            self.exchange = self.paper
+            self.notifier.info(
+                f"PAPER MODE active (initial {initial:.0f} USDT, fee {fee:.3f}%). "
+                f"Set trading.mode=\"live\" + screener.auto_trade=true to go live."
+            )
+        else:
+            self.paper = None
+            if mode != "live":
+                raise ValueError(f"trading.mode harus 'paper' atau 'live', dapat {mode!r}")
 
         # engines
         self.risk = RiskEngine(config["risk"], self.exchange)
@@ -73,6 +95,13 @@ class TradingBot:
         )
         self.trend = TrendFilter(self.exchange, config)
         self.store = TradeStore()
+        self.decision_engine = UnifiedDecisionEngine(
+            config, feature_engine=self.feature_engine, risk=self.risk,
+            portfolio=self, exchange=self.exchange,
+        )
+        self.funnel = SignalFunnel(store=self.store)
+        self.missed_journal = MissedTradeJournal(store=self.store)
+        self.reviewer = TradeReviewer(store=self.store)
         self.reflector = Reflector(
             config,
             config.get("strategies", {}).get("ai_signal", {}),
@@ -92,16 +121,21 @@ class TradingBot:
         self.execution = ExecutionService(
             config, self.exchange, self.risk, self.orders, self.notifier,
             self.strategies, self._whale_detector(), self.portfolio,
+            store=self.store, funnel=self.funnel,
         )
         self.signals = SignalService(
             config, self.exchange, self.notifier, self.risk, self.execution,
             self.feature_engine, self.strategies, self.trend, self._whale_detector(),
             self.portfolio, self.candles,
+            store=self.store, decision_engine=self.decision_engine,
+            funnel=self.funnel, missed_journal=self.missed_journal,
         )
         self.screen = ScreenerService(
             config, self.exchange, self.notifier, self.risk, self.execution,
             self.feature_engine, self._whale_detector(), self.portfolio, self.store,
             self.candles,
+            decision_engine=self.decision_engine, funnel=self.funnel,
+            missed_journal=self.missed_journal,
         )
         self.whale_svc = WhaleService(config, self.exchange, self.notifier, self._whale_detector(), self.bus)
 
@@ -329,7 +363,11 @@ class TradingBot:
                 continue
             atr = self.portfolio.atr_of(df)
             await asyncio.to_thread(self.execution.run_grid, symbol, positions, equity, atr)
-        await asyncio.to_thread(self.store.save_state, "trailing", self.portfolio.trailing)
+        await asyncio.to_thread(self.store.save_state, "trailing", self.portfolio.trailing_snapshot())
+        try:
+            await asyncio.to_thread(self.funnel.save)
+        except Exception as e:
+            logger.warning("funnel save failed: %s", e)
         await self._schedule_jobs()
 
     def _manage_once_sync(self) -> None:
@@ -372,7 +410,11 @@ class TradingBot:
                 continue
             atr = self.portfolio.atr_of(df)
             self.execution.run_grid(symbol, positions, equity, atr)
-        self.store.save_state("trailing", self.portfolio.trailing)
+        self.store.save_state("trailing", self.portfolio.trailing_snapshot())
+        try:
+            self.funnel.save()
+        except Exception as e:
+            logger.warning("funnel save failed: %s", e)
         self._schedule_jobs_sync()
 
     async def _schedule_jobs(self) -> None:

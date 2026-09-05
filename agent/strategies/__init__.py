@@ -2,12 +2,14 @@ from agent.strategies.momentum import MomentumStrategy
 from agent.strategies.ai_signal import AISignalStrategy
 from agent.strategies.grid import GridStrategy
 from agent.strategies.mean_reversion import MeanReversionStrategy
+from agent.strategies.support_resistance import SupportResistanceStrategy
 
 STRATEGY_MAP = {
     "momentum": MomentumStrategy,
     "ai_signal": AISignalStrategy,
     "grid": GridStrategy,
     "mean_reversion": MeanReversionStrategy,
+    "support_resistance": SupportResistanceStrategy,
 }
 
 
