@@ -1,8 +1,11 @@
-"""ExecutionService.screen_trade_ok: fixed-notional vs risk-based sizing."""
+"""ExecutionService safeguard: no valid TradeTicket, no order forwarding."""
+
+import time
 
 import pytest
 
 from agent.core.risk import RiskEngine
+from agent.decision.ticket import TradeTicket
 from agent.services.execution import ExecutionService
 
 
@@ -92,3 +95,63 @@ def test_risk_based_sizing_large_account():
     assert equity_eff == pytest.approx(1000.0)
     qty = svc.risk.compute_position_size("X/USDT:USDT", 100.0, equity_eff, "buy")
     assert qty == pytest.approx(1.0)
+
+
+class FakeOrders:
+    def __init__(self, result=None):
+        self.result = result or {"id": "O1", "symbol": "X/USDT:USDT"}
+        self.calls = []
+
+    def open_position(self, symbol, signal, equity, atr=None, ticket=None):
+        self.calls.append({"symbol": symbol, "ticket": ticket})
+        return self.result
+
+
+def make_exec_service(orders):
+    cfg = {"risk": dict(RISK_CFG), "execution": {}}
+    ex = FakeExchange()
+    risk = RiskEngine(cfg["risk"], ex)
+    svc = ExecutionService(
+        cfg, ex, risk, orders=orders, notifier=None,
+        strategies=[], whale=None, portfolio=None,
+    )
+    return svc
+
+
+def _signal():
+    return {"strategy": "screener", "symbol": "X/USDT:USDT", "side": "LONG",
+            "action": "BUY", "price": 100.0, "confidence": 0.8, "reason": []}
+
+
+def test_open_position_requires_ticket():
+    orders = FakeOrders()
+    svc = make_exec_service(orders)
+    assert svc.open_position("X/USDT:USDT", _signal(), 100.0, None, ticket=None) is None
+    assert orders.calls == []
+
+
+def test_open_position_rejects_expired_or_non_new_ticket():
+    orders = FakeOrders()
+    svc = make_exec_service(orders)
+    expired = TradeTicket(ticket_id="T-EXP", symbol="X/USDT:USDT", side="LONG", strategy="s",
+                          entry=100.0, created_at=100, expires_at=101)
+    assert not expired.is_valid()
+    assert svc.open_position("X/USDT:USDT", _signal(), 100.0, None, ticket=expired) is None
+    assert orders.calls == []
+
+    filled = TradeTicket.new("X/USDT:USDT", "LONG", "s", 100.0)
+    filled.mark_filled("oid")
+    assert not filled.is_valid()
+    assert svc.open_position("X/USDT:USDT", _signal(), 100.0, None, ticket=filled) is None
+    assert orders.calls == []
+
+
+def test_open_position_forward_valid_ticket_to_order_manager():
+    orders = FakeOrders()
+    svc = make_exec_service(orders)
+    ticket = TradeTicket.new("X/USDT:USDT", "LONG", "screener", 100.0,
+                             stop_loss=99.0, take_profit=103.0, ttl_seconds=300)
+    order = svc.open_position("X/USDT:USDT", _signal(), 100.0, 1.0, ticket=ticket)
+    assert order is not None
+    assert orders.calls == [{"symbol": "X/USDT:USDT", "ticket": ticket}]
+    assert order["id"] == "O1"

@@ -76,8 +76,10 @@ def validate_config(config: dict) -> List[str]:
 
     screener = config.get("screener", {}) or {}
     if mode == "live" and screener.get("auto_trade", False):
-        add("LIVE trading: screener.auto_trade=true AKTIF — jalankan dengan paper dulu "
-            "dan konfirmasi eksplisit sebelum live.")
+        confirmed = bool((config.get("trading", {}) or {}).get("confirm_live_auto_trade", False))
+        if not confirmed:
+            add("LIVE trading: screener.auto_trade=true AKTIF — set trading.confirm_live_auto_trade=true "
+                "sebagai konfirmasi eksplisit sebelum live.")
     return problems
 
 

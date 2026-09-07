@@ -39,6 +39,38 @@ def test_ticket_persistence_roundtrip(store):
     assert row["exchange_order_id"] == "eoid"
 
 
+def test_ticket_persists_screener_metadata_columns(store):
+    t = TradeTicket.new("X/USDT:USDT", "LONG", "screener", 100.0,
+                        stop_loss=99.0, take_profit=103.0, position_size=1.0,
+                        ttl_seconds=300, ticket_id="SCR-ABC123",
+                        equity=120.0, source="screener", decision_status="PASS",
+                        metadata={"source": "screener", "strategy": "screener"})
+    store.save_ticket(t)
+
+    row = store.get_ticket(t.ticket_id)
+    assert row["equity"] == pytest.approx(120.0)
+    assert row["source"] == "screener"
+    assert row["decision_status"] == "PASS"
+
+
+def test_get_active_ticket_blocks_live_new_but_not_expired(store):
+    live = TradeTicket.new("X/USDT:USDT", "LONG", "screener", 100.0, ttl_seconds=300,
+                           ticket_id="SCR-LIVE")
+    store.save_ticket(live)
+    active = store.get_active_ticket("X/USDT:USDT", "LONG")
+    assert active is not None
+    assert active["ticket_id"] == "SCR-LIVE"
+
+    store.update_ticket_status(live.ticket_id, "CANCELLED")
+    assert store.get_active_ticket("X/USDT:USDT", "LONG") is None
+
+    expired = TradeTicket(ticket_id="SCR-EXP", symbol="X/USDT:USDT", side="LONG",
+                          strategy="screener", entry=100.0, created_at=100, expires_at=101)
+    store.save_ticket(expired)
+    assert store.get_active_ticket("X/USDT:USDT", "LONG") is None
+    assert store.get_ticket("SCR-EXP")["status"] == "NEW"
+
+
 def test_decision_trail(store):
     store.save_decision(symbol="X", status="PASS", action="BUY", score=6.5,
                         confidence=0.7, regime="TRENDING_UP", reasons=["trend up"])

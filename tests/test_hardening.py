@@ -43,6 +43,14 @@ def test_live_auto_trade_warning():
     assert any("LIVE trading" in p for p in problems)
 
 
+def test_live_auto_trade_ok_with_confirmation():
+    cfg = _base_cfg(
+        trading={"mode": "live", "confirm_live_auto_trade": True},
+        screener={"auto_trade": True},
+    )
+    assert validate_config(cfg) == []
+
+
 def test_validate_or_raise():
     with pytest.raises(ConfigError):
         validate_or_raise(_base_cfg(trading={"mode": "bogus"}))

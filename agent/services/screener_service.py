@@ -1,13 +1,16 @@
 """Screener service — periodic auto-screen and auto-trade candidate flow."""
 
+import hashlib
 import logging
 import threading
 import time
 
 from agent.core.screener import Screener
 from agent.core.utils import is_valid_atr
+from agent.decision.ticket import TradeTicket
 from agent.execution.notifier import fmt_wib
 from agent.services.filters import TradeFilters
+from agent.services.stages import StagedScreenerPipeline
 from agent.strategies.scoring import ScreenerScorer, ScreeningGate, TRACE_PREFIX
 
 logger = logging.getLogger("trading-agent")
@@ -32,9 +35,16 @@ class ScreenerService:
         self.filters = TradeFilters(config)
         self.scorer = ScreenerScorer(config, exchange)
         self.gate = ScreeningGate(config, risk, execution, exchange, portfolio)
+        self.pipeline = StagedScreenerPipeline(
+            config, exchange, notifier, risk, execution, feature_engine,
+            self.whale, portfolio, store, candles,
+            scorer=self.scorer, gate=self.gate, filters=self.filters,
+            decision_engine=decision_engine, funnel=funnel, missed_journal=missed_journal,
+        )
         self._last_auto_screen = float(store.load_state("last_auto_screen", 0.0) or 0.0)
         self._min_equity = float(config["risk"].get("min_equity_usdt", 20))
         self._lock = threading.RLock()
+        self._minted = set()
 
     def should_run(self, now=None) -> bool:
         sc = self.config.get("screener", {})
@@ -84,6 +94,9 @@ class ScreenerService:
         sc = self.config.get("screener", {})
         if not sc.get("auto_trade", False):
             return
+        if self.pipeline.enabled:
+            self.pipeline.run()
+            return
         if not self.filters.trading_hours_ok():
             logger.info("[TRACE] auto-trade skip: di luar jam trading (no_trade_hours_wib)")
             return
@@ -101,6 +114,7 @@ class ScreenerService:
             logger.info("%s auto-trade batal %s: %s", TRACE_PREFIX, category, detail)
             return
         count = 0
+        self._minted = set()
         for r in results:
             if count >= top:
                 break
@@ -144,6 +158,7 @@ class ScreenerService:
                 if not ok:
                     self.scorer.log_trace(symbol, verdict, "REJECT", detail=f"{category}: {detail}")
                     continue
+                dv = None
                 if self.decision_engine is not None:
                     dv = self.decision_engine.assess(
                         symbol, df, features=None,
@@ -176,11 +191,99 @@ class ScreenerService:
                     symbol, side, r["price"], r.get("atr") or 0.0, signal.get("metadata"), decision["confidence"]
                 )
                 self.portfolio.set_trade_meta(symbol, "screener", setup, decision["confidence"])
+                if (symbol, side) in self._minted:
+                    self.scorer.log_trace(symbol, verdict, "REJECT", detail="duplicate_ticket")
+                    continue
+                if self._active_ticket(symbol, side) is not None:
+                    self.scorer.log_trace(symbol, verdict, "REJECT", detail="duplicate_ticket")
+                    continue
+                ticket = self._build_ticket(symbol, side, r["price"], r.get("atr") or 0.0, decision, verdict, dv, equity_eff)
+                if ticket is None or not ticket.is_valid():
+                    self.scorer.log_trace(symbol, verdict, "REJECT", detail="invalid_ticket")
+                    continue
+                self._minted.add((symbol, side))
+                self._persist_ticket(ticket)
+                if self.funnel:
+                    self.funnel.inc("tickets_created")
+                    try:
+                        self.funnel.save()
+                    except Exception:
+                        pass
                 self.scorer.log_trace(symbol, verdict, "ACCEPT")
-                self.execution.open_position(symbol, signal, equity_eff, r.get("atr") or 0.0)
+                self.execution.open_position(symbol, signal, equity_eff, r.get("atr") or 0.0, ticket=ticket)
                 count += 1
 
     # -- decision gateway (explainable veto on the screener path) ----------
+
+    def _active_ticket(self, symbol, side):
+        if self.store is None:
+            return None
+        try:
+            return self.store.get_active_ticket(symbol, side)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _ticket_id(symbol, side, ttl):
+        bucket = int(time.time()) // max(int(ttl or 300), 1)
+        raw = f"screener|{symbol}|{side}|{bucket}".encode("utf-8")
+        return "SCR-" + hashlib.sha1(raw).hexdigest()[:12].upper()
+
+    def _build_ticket(self, symbol, side, price, atr, decision, verdict, dv, equity_eff):
+        entry = float(price or 0)
+        if entry <= 0:
+            return None
+        sl = tp = None
+        try:
+            buy_side = "buy" if side == "LONG" else "sell"
+            sl = self.risk.build_stop_loss(entry, buy_side, atr)
+            tp = self.risk.build_take_profit(entry, buy_side, atr)
+        except Exception:
+            pass
+        confidence = float(dv.confidence) if dv is not None else float(verdict.get("confidence") or 0.0)
+        if dv is not None:
+            score = float(dv.score)
+            regime = dv.regime
+            reasons = [str(r) for r in dv.reasons]
+            evidence = dv.evidence_dicts()
+            decision_status = dv.status
+        else:
+            score, regime, reasons, evidence, decision_status = 0.0, None, [], [], "PASS"
+            reasons = [str(r) for r in decision.get("reason", [])]
+        risk_amount = size = rr = None
+        try:
+            risk_amount = self.risk.risk_per_trade_amount(equity_eff)
+            size = self.risk.risk_position_size(symbol, entry, side, atr=atr, equity=equity_eff, stop_loss=sl)
+            if sl and tp:
+                _ok, _code, _val = self.risk.validate_rr(entry, sl, tp, side)
+                rr = float(_val)
+        except Exception:
+            pass
+        ttl = float((self.config.get("decision", {}) or {}).get("ticket_ttl_seconds", 300) or 300)
+        leverage = getattr(self.risk, "cfg", {}).get("leverage", 1) if hasattr(self.risk, "cfg") else 1.0
+        return TradeTicket.new(
+            symbol, side, "screener", entry,
+            stop_loss=sl, take_profit=tp,
+            risk_pct=float((self.config.get("risk", {}) or {}).get("risk_per_trade_pct", 1.0)),
+            risk_amount=float(risk_amount or 0.0),
+            position_size=size,
+            leverage=float(leverage),
+            atr=atr, rr=rr,
+            score=score, confidence=confidence, regime=regime,
+            reasons=reasons, evidence=evidence,
+            ttl_seconds=ttl,
+            metadata={"source": "screener", "strategy": "screener", "symbol": symbol},
+            ticket_id=self._ticket_id(symbol, side, ttl),
+            equity=equity_eff, source="screener", decision_status=decision_status,
+        )
+
+    def _persist_ticket(self, ticket):
+        if self.store is None:
+            return
+        try:
+            self.store.save_ticket(ticket)
+        except Exception:
+            pass
 
     def _record_decision(self, dv):
         if self.store is None:

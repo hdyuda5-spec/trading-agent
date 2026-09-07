@@ -131,22 +131,23 @@ class SignalService:
 
         Default thresholds are lenient (0.0), so the engine is informational
         until configured — but hard vetoes (invalid price, SL/TP, daily loss,
-        min equity, halted) always win over a strategy signal.
+        min equity, halted) always win over a strategy signal. A passing
+        candidate always walks out with a valid TradeTicket.
         """
-        if self.decision_engine is None:
-            return None
-        verdict = self.decision_engine.assess(
-            symbol, df, features=features,
-            advisory=signal.get("advisory"),
-            strategy_side=signal["side"],
-            signal_conf=signal.get("confidence"),
-            equity=equity, positions=positions,
-            price=entry, sl=sl, tp=tp1, atr=atr,
-        )
-        self._record_decision(verdict)
-        if verdict.should_block():
-            self._blocked(symbol, signal, verdict)
-            return None
+        verdict = None
+        if self.decision_engine is not None:
+            verdict = self.decision_engine.assess(
+                symbol, df, features=features,
+                advisory=signal.get("advisory"),
+                strategy_side=signal["side"],
+                signal_conf=signal.get("confidence"),
+                equity=equity, positions=positions,
+                price=entry, sl=sl, tp=tp1, atr=atr,
+            )
+            self._record_decision(verdict)
+            if verdict.should_block():
+                self._blocked(symbol, signal, verdict)
+                return None
         ticket = self._build_ticket(symbol, signal, verdict, entry, sl, tp1, atr, equity)
         if ticket is not None:
             self._persist_ticket(ticket)
@@ -159,28 +160,40 @@ class SignalService:
         return ticket
 
     def _build_ticket(self, symbol, signal, verdict, entry, sl, tp1, atr, equity):
-        if verdict.side is None:
-            return None
+        side = signal["side"]
+        if verdict is not None:
+            if verdict.side is None:
+                return None
+            side = verdict.side
         risk_amount = size = rr = None
         try:
             risk_amount = self.risk.risk_per_trade_amount(equity)
-            size = self.risk.risk_position_size(symbol, entry, verdict.side, atr=atr, equity=equity, stop_loss=sl)
-            rr = self.risk.validate_rr(entry, sl, tp1, verdict.side) if sl and tp1 else None
+            size = self.risk.risk_position_size(symbol, entry, side, atr=atr, equity=equity, stop_loss=sl)
+            if sl and tp1:
+                _ok, _code, _val = self.risk.validate_rr(entry, sl, tp1, side)
+                rr = float(_val)
         except Exception:
             pass
         ttl = float((self.config.get("decision", {}) or {}).get("ticket_ttl_seconds", 300) or 300)
         leverage = getattr(self.risk, "cfg", {}).get("leverage", 1) if hasattr(self.risk, "cfg") else 1.0
+        score = float(verdict.score) if verdict is not None else 0.0
+        confidence = float(verdict.confidence) if verdict is not None else float(signal.get("confidence") or 0.0)
+        regime = verdict.regime if verdict is not None else None
+        reasons = list(verdict.reasons) if verdict is not None else [str(r) for r in (signal.get("reason") or [])]
+        evidence = verdict.evidence_dicts() if verdict is not None else []
+        decision_status = verdict.status if verdict is not None else "PASS"
         return TradeTicket.new(
-            symbol, verdict.side, signal.get("strategy") or "live", entry,
+            symbol, side, signal.get("strategy") or "live", entry,
             stop_loss=sl, take_profit=tp1,
             risk_pct=float((self.config.get("risk", {}) or {}).get("risk_per_trade_pct", 1.0)),
             risk_amount=float(risk_amount or 0.0),
             position_size=size,
             leverage=float(leverage),
             atr=atr, rr=rr,
-            score=verdict.score, confidence=verdict.confidence, regime=verdict.regime,
-            reasons=list(verdict.reasons), evidence=verdict.evidence_dicts(),
+            score=score, confidence=confidence, regime=regime,
+            reasons=reasons, evidence=evidence,
             ttl_seconds=ttl, metadata={"source": "signal_service"},
+            equity=equity, source="signal_service", decision_status=decision_status,
         )
 
     def _record_decision(self, verdict):

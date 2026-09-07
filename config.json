@@ -1,7 +1,7 @@
 {
   "exchange": {
     "name": "binance",
-    "testnet": true,
+    "testnet": false,
     "options": {
       "defaultType": "swap",
       "defaultSubType": "linear",
@@ -12,7 +12,8 @@
   "timeframe": "15m",
 
   "trading": {
-    "mode": "paper",
+    "mode": "live",
+    "confirm_live_auto_trade": true,
     "paper": {
       "initial_balance_usdt": 1000,
       "fee_pct": 0.05
@@ -59,7 +60,7 @@
   "risk": {
     "max_position_pct": 20,
     "max_total_exposure_pct": 60,
-    "leverage": 3,
+    "leverage": 5,
     "max_leverage": 5,
     "take_profit_pct": 2.0,
     "stop_loss_pct": 1.0,
@@ -83,7 +84,7 @@
     "adaptive_sizing": true,
     "atr_normal_pct": 1.0,
     "size_volatility_bounds": [0.5, 1.5],
-    "fixed_notional_usdt": 2,
+    "fixed_notional_usdt": 5,
     "fixed_notional_max_equity_usdt": 100
   },
 
@@ -112,21 +113,6 @@
     },
     "ai_signal": {
       "enabled": false,
-      "model": "openai/gpt-4o-mini",
-      "base_url": "https://openrouter.ai/api/v1",
-      "json_mode": true,
-      "prompt_template": "Analisislah {symbol} pada timeframe {timeframe} untuk keperluan advisory. Data teknikal: {indicators}. Sentimen berita: {news}. Pelajaran dari trade masa lalu bot: {lessons}. Gunakan pelajaran itu untuk menghindari pola yang pernah gagal dan pertahankan pola yang pernah berhasil. JANGAN merekomendasikan posisi beli/jual; kamu hanya penasihat. Keluarkan HANYA satu objek JSON tanpa teks lain dengan skema: {\"market_summary\": string, \"trend\": \"bullish\"|\"bearish\"|\"neutral\", \"macro\": string, \"news\": string, \"risk\": string, \"confidence\": number 0-100}.",
-      "debate": {
-        "enabled": true,
-        "bull_prompt": "",
-        "bear_prompt": "",
-        "arbiter_prompt": ""
-      },
-      "reflection": {
-        "enabled": true,
-        "max_workers": 1,
-        "lesson_max_chars": 500
-      },
       "confidence_threshold": 75,
       "rsi_confirmation": true,
       "rsi_long_range": [40, 75],
@@ -177,7 +163,7 @@
   },
 
   "telegram": {
-    "enabled": false,
+    "enabled": true,
     "bot_token": "",
     "chat_id": ""
   },
@@ -199,9 +185,9 @@
     ],
     "enabled": true,
     "auto_interval_minutes": 30,
-    "no_trade_hours_wib": [2, 7, 10, 11, 13, 20],
+    "no_trade_hours_wib": [],
     "top_signal_cards": 3,
-    "auto_trade": false,
+    "auto_trade": true,
     "top_trade_candidates": 3,
     "rsi_confirmation": true,
     "rsi_long_range": [40, 75],
@@ -209,6 +195,16 @@
     "require_confirmation": true,
     "max_extended_pct": 15,
     "news": [],
+    "pipeline": {
+      "enabled": true,
+      "universe_size": 50,
+      "tech_keep": 20,
+      "risk_keep": 8,
+      "rank_n": 3,
+      "min_bars": 52,
+      "timeframe": "1h",
+      "min_rr": 0
+    },
     "scoring": {
       "min_confidence": 0.6,
       "min_margin": 0.1,

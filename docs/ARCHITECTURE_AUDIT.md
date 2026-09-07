@@ -227,7 +227,8 @@ runner beyond one ad-hoc `ALTER TABLE` for `confidence`.
    proper CLI/inspection layer.
 7. **No paper-trading broker** — the only safe mode is testnet API flags.
 8. **No NEWS provider abstraction** (`NewsProvider`/`SentimentProvider`);
-   ai_signal hardcodes an OpenRouter style URL; screener reads `news` list.
+   `ai_signal` is an optional offline-only LLM advisory strategy (loaded lazily,
+   no provider configured by default); screener reads `news` list.
 
 ---
 

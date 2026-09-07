@@ -1,7 +1,15 @@
-"""LLM advisory strategy.
+"""Optional LLM advisory strategy (offline by default).
 
-The LLM is *advisory only*: it never returns BUY/SELL and never recommends a
-position. It produces a single structured JSON advisory::
+This strategy is *not* part of the core runtime. It only activates when an
+external LLM provider is explicitly configured (``api_key`` + ``base_url`` +
+``model``, e.g. under ``strategies.ai_signal`` in config or the ``AI_API_KEY``
+env var). Without a configured provider the strategy is a pure no-op: it never
+touches the network, never blocks, and emits no signal — the core pipeline
+runs deterministically without it.
+
+When a provider IS configured, the LLM is *advisory only*: it never returns
+BUY/SELL and never recommends a position. It produces a single structured JSON
+advisory::
 
     {
         "market_summary": "...",
@@ -99,10 +107,15 @@ class AISignalStrategy(BaseStrategy):
 
     def __init__(self, config, strat_cfg, exchange, notifier, feature_engine=None):
         super().__init__(config, strat_cfg, exchange, notifier, feature_engine=feature_engine)
-        self.api_key = os.getenv("AI_API_KEY", "")
-        self.base_url = self.strat_cfg.get("base_url", "https://api.openai.com/v1")
-        self.model = self.strat_cfg.get("model", "gpt-4o-mini")
+        self.api_key = os.getenv("AI_API_KEY", self.strat_cfg.get("api_key", ""))
+        # No default endpoint: the strategy stays offline unless an external
+        # provider is explicitly configured via `base_url` + `model`.
+        self.base_url = self.strat_cfg.get("base_url", "")
+        self.model = self.strat_cfg.get("model", "")
         self.json_mode = self.strat_cfg.get("json_mode", True)
+        # An explicit provider config is required before any LLM call; without
+        # it the strategy is a deterministic no-op on the core pipeline.
+        self.provider_ready = bool(self.api_key and self.base_url and self.model)
         # Minimum LLM confidence (0-100) for the advisory to be directional;
         # below it the advisory counts as neutral and the Decision Engine
         # relies on the technical features alone.
@@ -113,7 +126,7 @@ class AISignalStrategy(BaseStrategy):
         self.min_interval = self.strat_cfg.get("min_interval_seconds", 60)
         self.news_max_chars = self.strat_cfg.get("news_max_chars", 500)
         self.debate_cfg = self.strat_cfg.get("debate", {})
-        self.debate_enabled = bool(self.api_key) and self.debate_cfg.get("enabled", True)
+        self.debate_enabled = self.provider_ready and self.debate_cfg.get("enabled", True)
         self._cache = {}
         self._last_call = {}
         self._futures = {}
@@ -123,7 +136,7 @@ class AISignalStrategy(BaseStrategy):
         self.risk_engine = RiskEngine(config)
 
     def generate_signal(self, symbol, df, features=None):
-        if not self.api_key:
+        if not self.provider_ready:
             return None
         last_ts = df.index[-1]
         cached = self._cache.get(symbol)

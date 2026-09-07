@@ -7,7 +7,14 @@ Bot trading otomatis multi-strategi untuk Binance / Bybit / OKX futures. Satu ko
 - **3 exchange**: Binance, Bybit, OKX (USDT-M linear futures) + mode testnet.
 - **Multi-strategi**:
   - `momentum` — EMA cross (fast/slow) + filter RSI sungguhan + cooldown re-entry.
-  - `ai_signal` — LLM (OpenAI-compatible: OpenAI, DeepSeek, Groq, dll.) baca data teknikal + news dan memberi **advisory saja** (structured JSON: `market_summary`, `trend`, `macro`, `news`, `risk`, `confidence`) — **LLM tidak pernah mengeluarkan BUY/SELL**; arah trade diputuskan oleh Decision Engine (advisory ikut dihitung sebagai vote berbobot `ai_advisory`). **Non-blocking** (jalan di thread, tick tidak tertahan) + cache per-candle + rate limit + sanitasi prompt-injection + mode JSON strict (`json_mode`).
+  - `ai_signal` — **opsional / offline-first** (tidak wajib): hanya aktif jika
+    provider LLM eksternal dikonfigurasi eksplisit (`base_url` + `model` + key).
+    Tanpa provider, strategi ini no-op — pipeline core berjalan deterministik.
+    Ia membaca data teknikal + news dan memberi **advisory saja** (structured
+    JSON: `market_summary`, `trend`, `macro`, `news`, `risk`, `confidence`) —
+    **LLM tidak pernah mengeluarkan BUY/SELL**; arah trade diputuskan oleh
+    Decision Engine (advisory ikut dihitung sebagai vote berbobot `ai_advisory`).
+    **Tanpa API AI eksternal**, bot tetap 100% berfungsi.
   - `grid` — grid trading limit order dengan **pairing buy→sell** (tanpa naked short), re-center saat harga drift, hormati `max_grid_orders`.
 - **Filter tren multi-timeframe** — sinyal 15m hanya dieksekusi jika searah tren 1h (EMA 21/50), TTL cache per timeframe.
 - **Manajemen risiko**:

@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 
 
@@ -126,6 +127,14 @@ class TradeStore:
             )
             """
         )
+        tcols = self._columns("tickets", self._db)
+        for col, decl in (
+            ("equity", "REAL"),
+            ("source", "TEXT"),
+            ("decision_status", "TEXT"),
+        ):
+            if col not in tcols:
+                self._db.execute(f"ALTER TABLE tickets ADD COLUMN {col} {decl}")
         self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS missed_trades (
@@ -337,7 +346,7 @@ class TradeStore:
                 "INSERT OR REPLACE INTO tickets (created_at,ticket_id,symbol,side,strategy,"
                 "entry,stop_loss,take_profit,risk_pct,risk_amount,position_size,notional,rr,"
                 "score,confidence,regime,status,order_id,exchange_order_id,reasons,evidence,"
-                "expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "expires_at,equity,source,decision_status) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     ticket.created_at, ticket.ticket_id, ticket.symbol, ticket.side,
                     ticket.strategy, ticket.entry, ticket.stop_loss, ticket.take_profit,
@@ -346,9 +355,32 @@ class TradeStore:
                     ticket.regime, ticket.status, ticket.order_id,
                     ticket.exchange_order_id, json.dumps(ticket.reasons),
                     json.dumps(ticket.evidence), ticket.expires_at,
+                    ticket.equity, ticket.source, ticket.decision_status,
                 ),
             )
             self._db.commit()
+
+    def get_active_ticket(self, symbol, side=None):
+        """Latest non-expired NEW ticket for a symbol/side (restart-safe dedup)."""
+        q = "SELECT * FROM tickets WHERE symbol=? AND status='NEW'"
+        params = [symbol]
+        if side:
+            q += " AND side=?"
+            params.append(side)
+        q += " ORDER BY id DESC LIMIT 1"
+        with self._lock:
+            row = self._db.execute(q, params).fetchone()
+        if not row:
+            return None
+        cols = [c[1] for c in self._db.execute("PRAGMA table_info(tickets)").fetchall()]
+        data = dict(zip(cols, row))
+        try:
+            expires = float(data.get("expires_at") or 0)
+        except (TypeError, ValueError):
+            expires = 0.0
+        if expires and time.time() >= expires:
+            return None
+        return data
 
     def update_ticket_status(self, ticket_id, status, order_id=None, exchange_order_id=None):
         with self._lock:

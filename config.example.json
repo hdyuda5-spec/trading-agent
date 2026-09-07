@@ -68,10 +68,10 @@
     },
     "ai_signal": {
       "enabled": false,
-      "model": "openai/gpt-4o-mini",
-      "base_url": "https://openrouter.ai/api/v1",
-      "prompt_template": "Berikan keputusan trading untuk {symbol} pada timeframe {timeframe}. Data teknikal: {indicators}. Sentimen berita: {news}. Pelajaran dari trade masa lalu bot: {lessons}. Gunakan pelajaran itu untuk menghindari pola yang pernah gagal dan pertahankan pola yang pernah berhasil. Jawab hanya satu kata: LONG, SHORT, atau NEUTRAL, lalu berikan confidence 0-100 dalam format JSON.",
-      "confidence_threshold": 65,
+      "confidence_threshold": 75,
+      "rsi_confirmation": true,
+      "rsi_long_range": [40, 75],
+      "rsi_short_range": [25, 60],
       "news_api_url": "",
       "min_interval_seconds": 300,
       "news_max_chars": 500

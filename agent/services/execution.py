@@ -34,6 +34,9 @@ class ExecutionService:
     # -- order lifecycle -------------------------------------------------
 
     def open_position(self, symbol, signal, equity, atr, ticket=None):
+        if ticket is None or not ticket.is_valid():
+            logger.info("[TICKET] %s skipped: TradeTicket tidak valid/belum dibuat", symbol)
+            return None
         order = self.orders.open_position(symbol, signal, equity, atr, ticket=ticket)
         if order is not None and ticket is not None:
             if self.funnel:

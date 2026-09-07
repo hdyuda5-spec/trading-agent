@@ -36,6 +36,9 @@ class TradeTicket:
     reasons: List[str] = field(default_factory=list)
     evidence: List[dict] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    equity: Optional[float] = None   # effective equity used for sizing
+    source: Optional[str] = None     # "screener" | "signal_service" | ...
+    decision_status: Optional[str] = None  # PASS | REJECT | WAIT from the Decision Engine
     status: str = "NEW"            # NEW | FILLED | CANCELLED | EXPIRED | REJECTED
     order_id: Optional[str] = None
     exchange_order_id: Optional[str] = None
@@ -49,10 +52,11 @@ class TradeTicket:
             *, stop_loss=None, take_profit=None, risk_pct=0.0, risk_amount=0.0,
             position_size=None, leverage=1.0, atr=None, rr=None,
             score=0.0, confidence=0.0, regime=None, reasons=None,
-            evidence=None, ttl_seconds=None, metadata=None) -> "TradeTicket":
+            evidence=None, ttl_seconds=None, metadata=None, ticket_id=None,
+            equity=None, source=None, decision_status=None) -> "TradeTicket":
         ttl = ttl_seconds if ttl_seconds is not None else 300.0
         return cls(
-            ticket_id=uuid.uuid4().hex[:12].upper(),
+            ticket_id=ticket_id or uuid.uuid4().hex[:12].upper(),
             symbol=symbol,
             side=side,
             strategy=strategy,
@@ -72,6 +76,9 @@ class TradeTicket:
             reasons=list(reasons or []),
             evidence=list(evidence or []),
             metadata=dict(metadata or {}),
+            equity=float(equity) if equity is not None else None,
+            source=source,
+            decision_status=decision_status,
             ttl_seconds=ttl,
             expires_at=time.time() + ttl,
         )
@@ -83,6 +90,25 @@ class TradeTicket:
         if self.expires_at is None:
             return False
         return now >= self.expires_at
+
+    def is_valid(self, now: Optional[float] = None) -> bool:
+        """Execution gate: only NEW, well-formed, non-expired tickets may act."""
+        if not self.ticket_id:
+            return False
+        if not self.symbol:
+            return False
+        if self.side not in ("LONG", "SHORT"):
+            return False
+        try:
+            if not (float(self.entry) > 0):
+                return False
+        except (TypeError, ValueError):
+            return False
+        if self.status != "NEW":
+            return False
+        if self.expired(now):
+            return False
+        return True
 
     def mark_filled(self, order_id: str, exchange_order_id: Optional[str] = None,
                     order_type: Optional[str] = None) -> None:
@@ -144,6 +170,9 @@ class TradeTicket:
             "regime": self.regime,
             "reasons": list(self.reasons),
             "evidence": list(self.evidence),
+            "equity": self.equity,
+            "source": self.source,
+            "decision_status": self.decision_status,
             "status": self.status,
             "order_id": self.order_id,
             "exchange_order_id": self.exchange_order_id,

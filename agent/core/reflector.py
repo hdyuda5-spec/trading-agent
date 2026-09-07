@@ -5,8 +5,15 @@ import requests
 
 
 class Reflector:
-    """Post-trade LLM reflection: upgrades the deterministic lesson with an
-    async, outcome-aware analysis (port of TradingAgents' Phase B reflection).
+    """Optional post-trade LLM reflection (offline by default).
+
+    Not part of the core runtime. It only activates when an external LLM
+    provider is explicitly configured (``AI_API_KEY`` env or
+    ``strategies.ai_signal.base_url`` + ``model``). Without a provider it is a
+    pure no-op: no threads, no network, no effect on the trade pipeline.
+
+    When active, it upgrades the deterministic lesson with an async,
+    outcome-aware analysis (port of TradingAgents' Phase B reflection).
     """
 
     def __init__(self, config, strat_cfg, notifier, store):
@@ -14,11 +21,13 @@ class Reflector:
         self.strat_cfg = strat_cfg
         self.notifier = notifier
         self.store = store
-        self.api_key = os.getenv("AI_API_KEY", "")
-        self.base_url = strat_cfg.get("base_url", "https://api.openai.com/v1")
-        self.model = strat_cfg.get("model", "gpt-4o-mini")
+        self.api_key = os.getenv("AI_API_KEY", strat_cfg.get("api_key", ""))
+        # No default endpoint: reflection stays offline unless an external
+        # provider is explicitly configured.
+        self.base_url = strat_cfg.get("base_url", "")
+        self.model = strat_cfg.get("model", "")
         ref_cfg = strat_cfg.get("reflection", {})
-        self.enabled = bool(self.api_key) and ref_cfg.get("enabled", True)
+        self.enabled = bool(self.api_key and self.base_url and self.model) and ref_cfg.get("enabled", True)
         self.max_workers = max(1, int(ref_cfg.get("max_workers", 1)))
         self.lesson_max_chars = int(ref_cfg.get("lesson_max_chars", 500))
         self._lock = threading.Lock()
